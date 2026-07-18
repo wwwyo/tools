@@ -48,12 +48,13 @@ function RankStamp({ rank }: { rank: string }) {
 
 export function App() {
   const [text, setText] = useState("");
-  const result = useMemo(() => analyze(text), [text]);
-  const wordCount = useMemo(() => countWords(text), [text]);
+  const [scoredText, setScoredText] = useState("");
+  const result = useMemo(() => analyze(scoredText), [scoredText]);
+  const wordCount = useMemo(() => countWords(scoredText), [scoredText]);
 
   const highlightedNodes = useMemo(
-    () => buildHighlightedNodes(text, result.nonOverlapping),
-    [text, result.nonOverlapping],
+    () => buildHighlightedNodes(scoredText, result.nonOverlapping),
+    [scoredText, result.nonOverlapping],
   );
 
   const detectedItems = useMemo(() => {
@@ -85,13 +86,22 @@ export function App() {
         />
       </div>
       <div className="toolbar">
-        <button type="button" onClick={() => setText(SAMPLE_TEXT)}>
+        <button
+          type="button"
+          onClick={() => {
+            setText(SAMPLE_TEXT);
+            setScoredText(SAMPLE_TEXT);
+          }}
+        >
           サンプル文を試す
+        </button>
+        <button type="button" className="score-button" onClick={() => setScoredText(text)}>
+          採点する
         </button>
       </div>
 
       <div className="results">
-        {text.length === 0 ? null : (
+        {scoredText.length === 0 ? null : (
           <>
             {result.isShort ? (
               <div className="short-notice">
