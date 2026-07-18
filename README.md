@@ -14,4 +14,4 @@ bun run deploy # Cloudflare へデプロイ
 
 ## Tools
 
-- [薄っぺらな嘘 — Plausible Texture](src/plausible-texture/) — LLM っぽい定型句を検知して剥がす
+- [薄っぺらな戯](src/usuppera/) — LLM っぽい定型句を検知して剥がす

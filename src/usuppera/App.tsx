@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { analyze, CATEGORY_ORDER, SAMPLE_TEXT, type Match } from "./dictionary";
 import "./styles.css";
 
@@ -49,6 +49,7 @@ function RankStamp({ rank }: { rank: string }) {
 export function App() {
   const [text, setText] = useState("");
   const [scoredText, setScoredText] = useState("");
+  const backdropRef = useRef<HTMLDivElement>(null);
   const result = useMemo(() => analyze(scoredText), [scoredText]);
   const wordCount = useMemo(() => countWords(scoredText), [scoredText]);
 
@@ -56,6 +57,10 @@ export function App() {
     () => buildHighlightedNodes(scoredText, result.nonOverlapping),
     [scoredText, result.nonOverlapping],
   );
+
+  // 採点済みテキストと現在の入力が一致している間だけマーク付き表示を使う。
+  // 編集して text が scoredText からズレたら素のテキストに戻す。
+  const backdropNodes: ReactNode = text === scoredText && scoredText !== "" ? highlightedNodes : text;
 
   const detectedItems = useMemo(() => {
     const merged = new Map<string, number>();
@@ -71,18 +76,31 @@ export function App() {
     <div className="mx-auto max-w-[760px] px-4 pt-8 pb-16 leading-[1.8] max-[480px]:px-3 max-[480px]:pt-5 max-[480px]:pb-12">
       <header className="mb-7">
         <div>
-          <h1 className="m-0 mb-2 font-mincho text-[2rem] font-bold tracking-[0.08em]">薄っぺらな嘘</h1>
+          <h1 className="m-0 mb-2 font-mincho text-[2rem] font-bold tracking-[0.08em]">薄っぺらな戯</h1>
           <p className="m-0 text-[0.88rem] text-muted">
             LLM が日本語で使いがちな、もっともらしい定型句を辞書だけで検知します。
           </p>
         </div>
       </header>
 
-      <div className="overflow-hidden rounded border border-border">
+      <div className="relative overflow-hidden rounded border border-border">
+        <div
+          ref={backdropRef}
+          aria-hidden="true"
+          className="lined-textarea pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 pt-3 pb-0 text-base text-ink"
+        >
+          {backdropNodes}
+          {"\n"}
+        </div>
         <textarea
-          className="lined-textarea block w-full min-h-[222px] resize-y border-0 px-4 pt-3 pb-0 text-base text-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-2"
+          className="relative block min-h-[222px] w-full resize-y border-0 bg-transparent px-4 pt-3 pb-0 text-base text-transparent caret-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-2"
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onScroll={(e) => {
+            if (backdropRef.current) {
+              backdropRef.current.scrollTop = e.currentTarget.scrollTop;
+            }
+          }}
           placeholder="ここに文章を貼り付けてください"
         />
       </div>
@@ -130,12 +148,7 @@ export function App() {
               </div>
             )}
 
-            <h2 className="mt-0 mb-2.5 font-mincho text-base tracking-[0.05em]">ハイライト</h2>
-            <div className="mb-7 rounded border border-border bg-card-bg p-4 text-[0.95rem] whitespace-pre-wrap break-words">
-              {highlightedNodes.length > 0 ? highlightedNodes : "(空)"}
-            </div>
-
-            <h2 className="mt-0 mb-2.5 font-mincho text-base tracking-[0.05em]">検出された表現</h2>
+            <h2 className="mt-0 mb-2.5 font-mincho text-base tracking-[0.05em]">ぺらっぺらな表現</h2>
             {detectedItems.length > 0 ? (
               <ul className="m-0 list-none p-0">
                 {detectedItems.map(([phrase, count]) => (

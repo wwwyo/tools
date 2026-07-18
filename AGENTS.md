@@ -7,7 +7,7 @@
 - **1 ツール = 1 ディレクトリ**（`src/<appdir>/`、エントリは `index.html`）。ツールは vanilla JS でも React でも OK、ただし各ツールは独立していなければならない
 - **FORBIDDEN**: SPA 化、ツール間でのコンポーネント・ルーティング共有、クロスツール共有設計システム構築。ツールは常に独立
 - 外部 CDN / API に依存しない。決定論的なロジックはすべてページ内 JS で完結させる
-- ツールを追加したら `src/index.html` の一覧にリンクを足す（Vite はビルド時に `src/<appdir>/index.html` を自動検出）
+- ツール一覧は各ツールの `index.html` の `<title>` / `<meta name="description">` からビルド時に自動生成される（Vite はビルド時に `src/<appdir>/index.html` を自動検出し、`src/index.html` の一覧を手で足す必要はない）
 - 完成度より出荷速度。動いたら build して deploy して post する
 
 ## ディレクトリ構造
