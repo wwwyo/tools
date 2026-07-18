@@ -7,63 +7,82 @@
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #ffffff;
-    --fg: #1a1a1a;
-    --muted: #666666;
-    --border: #dddddd;
-    --card-bg: #f7f7f8;
-    --accent: #2b6cb0;
+    --paper: #FBFAF6;
+    --ink: #1F1B16;
+    --red: #C73E2E;
+    --rule: #8FA88A;
+    --muted: #8C857B;
+    --border: rgba(140, 133, 123, 0.35);
+    --card-bg: rgba(140, 133, 123, 0.06);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #16181c;
-      --fg: #e8e8e8;
-      --muted: #9a9a9a;
-      --border: #33363c;
-      --card-bg: #1f2226;
-      --accent: #6ea8fe;
+      --paper: #1B1916;
+      --ink: #E8E2D8;
+      --red: #E85B4A;
+      --muted: #A39A8C;
+      --border: rgba(232, 226, 216, 0.2);
+      --card-bg: rgba(232, 226, 216, 0.06);
     }
   }
   * { box-sizing: border-box; }
+  html, body { background: var(--paper); }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
     max-width: 720px;
     margin: 0 auto;
-    padding: 24px 16px 64px;
-    background: var(--bg);
-    color: var(--fg);
-    line-height: 1.7;
+    padding: 32px 16px 64px;
+    color: var(--ink);
+    line-height: 1.8;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .seal-mark {
+    width: 56px;
+    height: 56px;
+    flex-shrink: 0;
+    transform: rotate(-4deg);
   }
   h1 {
-    font-size: 1.5rem;
-    margin-bottom: 4px;
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+    letter-spacing: 0.05em;
+    font-size: 1.6rem;
+    margin: 0 0 4px;
   }
   p.lead {
     color: var(--muted);
     font-size: 0.9rem;
-    margin-top: 0;
-    margin-bottom: 24px;
+    margin: 0;
   }
   ul.tool-list {
     list-style: none;
     padding: 0;
     margin: 0;
+    border-top: 1px solid var(--border);
   }
   ul.tool-list li {
-    padding: 14px 16px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--card-bg);
-    margin-bottom: 10px;
+    padding: 16px 4px;
+    border-bottom: 1px solid var(--border);
   }
   ul.tool-list a {
     font-size: 1rem;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--ink);
     text-decoration: none;
+    border-bottom: 1px solid transparent;
   }
-  ul.tool-list a:hover {
-    text-decoration: underline;
+  ul.tool-list a:hover,
+  ul.tool-list a:focus-visible {
+    color: var(--red);
+    border-bottom-color: var(--red);
+  }
+  ul.tool-list a:focus-visible {
+    outline: 2px solid var(--red);
+    outline-offset: 2px;
   }
   ul.tool-list p {
     margin: 4px 0 0;
@@ -78,18 +97,31 @@
     color: var(--muted);
   }
   footer a {
-    color: var(--accent);
+    color: var(--red);
+  }
+  footer a:focus-visible {
+    outline: 2px solid var(--red);
+    outline-offset: 2px;
   }
 </style>
 </head>
 <body>
 
-<h1>tools</h1>
-<p class="lead">ペラいち PoC ツール集 — ビルドなし、外部依存なし、self-contained HTML</p>
+<header>
+  <svg class="seal-mark" viewBox="0 0 64 64" role="img" aria-label="赤い角印">
+    <rect x="4" y="4" width="56" height="56" fill="none" stroke="var(--red)" stroke-width="3" />
+    <rect x="9" y="9" width="46" height="46" fill="none" stroke="var(--red)" stroke-width="1.5" />
+    <text x="32" y="34" text-anchor="middle" dominant-baseline="central" fill="var(--red)" font-family="'Hiragino Mincho ProN', 'Yu Mincho', serif" font-size="30" font-weight="600">具</text>
+  </svg>
+  <div>
+    <h1>tools</h1>
+    <p class="lead">ペラいち PoC ツール集 — 外部依存なし、self-contained</p>
+  </div>
+</header>
 
 <ul class="tool-list">
   <li>
-    <a href="llm-ja-check.html">LLM 日本語っぽさチェッカー</a>
+    <a href="/llm-ja-check">LLM 日本語っぽさチェッカー</a>
     <p>定型句・過剰表現を辞書ベースで検知</p>
   </li>
 </ul>

@@ -1,0 +1,365 @@
+:root {
+  color-scheme: light dark;
+  --paper: #fbfaf6;
+  --ink: #1f1b16;
+  --red: #c73e2e;
+  --rule: #8fa88a;
+  --muted: #8c857b;
+  --border: rgba(140, 133, 123, 0.35);
+  --card-bg: rgba(140, 133, 123, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1b1916;
+    --ink: #e8e2d8;
+    --red: #e85b4a;
+    --rule: #8fa88a;
+    --muted: #a39a8c;
+    --border: rgba(232, 226, 216, 0.2);
+    --card-bg: rgba(232, 226, 216, 0.06);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: var(--paper);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+  color: var(--ink);
+  margin: 0;
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+  line-height: 1.8;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.seal-mark {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  transform: rotate(-4deg);
+}
+
+.header-text h1 {
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  letter-spacing: 0.05em;
+  font-size: 1.5rem;
+  margin: 0 0 4px;
+}
+
+.lead {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.paper-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 30px,
+    rgba(143, 168, 138, 0.28) 31px
+  );
+}
+
+textarea {
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  font-size: 1rem;
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  resize: vertical;
+  line-height: 30px;
+}
+
+textarea::placeholder {
+  color: var(--muted);
+}
+
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+button {
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.results {
+  margin-top: 28px;
+}
+
+.placeholder {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 24px 0;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
+.score-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  margin-bottom: 24px;
+}
+
+.hanko-stamp {
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  transform: rotate(-6deg);
+  animation: stamp-in 120ms ease-out;
+}
+
+@keyframes stamp-in {
+  from {
+    opacity: 0;
+    transform: rotate(-6deg) scale(1.4);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-6deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hanko-stamp {
+    animation: none;
+  }
+}
+
+.score-meta {
+  flex: 1;
+}
+
+.score-rank {
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  letter-spacing: 0.05em;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.score-comment {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+
+.score-sub {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.short-notice {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 24px;
+}
+
+h2 {
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  letter-spacing: 0.05em;
+  font-size: 1rem;
+  margin-bottom: 10px;
+  margin-top: 0;
+}
+
+.legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 0;
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-sample {
+  color: var(--ink);
+}
+
+.legend-teikeiku .legend-sample {
+  text-decoration: underline wavy var(--red);
+}
+
+.legend-kyocho .legend-sample {
+  text-decoration: underline solid var(--red);
+}
+
+.legend-kango .legend-sample {
+  text-decoration: underline dotted var(--red);
+}
+
+.legend-enkyoku .legend-sample {
+  text-decoration: underline double var(--red);
+}
+
+.legend-setsuzoku .legend-sample {
+  background: rgba(199, 62, 46, 0.15);
+  padding: 0 2px;
+}
+
+.highlighted-box {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  background: var(--card-bg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.95rem;
+  margin-bottom: 28px;
+}
+
+mark {
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+.mark-teikeiku {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--red);
+}
+
+.mark-kyocho {
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-color: var(--red);
+}
+
+.mark-kango {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--red);
+}
+
+.mark-enkyoku {
+  text-decoration-line: underline;
+  text-decoration-style: double;
+  text-decoration-color: var(--red);
+}
+
+.mark-setsuzoku {
+  background: rgba(199, 62, 46, 0.15);
+}
+
+.detect-group {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detect-group h3 {
+  font-size: 0.82rem;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.detect-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.detect-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+
+.detect-list li:first-child {
+  border-top: none;
+}
+
+.detect-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+footer {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+footer a {
+  color: var(--red);
+}
+
+@media (max-width: 480px) {
+  .page {
+    padding: 20px 12px 48px;
+  }
+  .score-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

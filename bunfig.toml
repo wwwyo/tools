@@ -1,4 +1,3 @@
 [install]
 exact = true
-# supply chain リスク低減: 公開後 7 日経過したバージョンのみ解決対象にする
 minimumReleaseAge = 604800
