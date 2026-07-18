@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tools</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --border: #dddddd;
+    --card-bg: #f7f7f8;
+    --accent: #2b6cb0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --fg: #e8e8e8;
+      --muted: #9a9a9a;
+      --border: #33363c;
+      --card-bg: #1f2226;
+      --accent: #6ea8fe;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin-bottom: 4px;
+  }
+  p.lead {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-top: 0;
+    margin-bottom: 24px;
+  }
+  ul.tool-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  ul.tool-list li {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-bg);
+    margin-bottom: 10px;
+  }
+  ul.tool-list a {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+  }
+  ul.tool-list a:hover {
+    text-decoration: underline;
+  }
+  ul.tool-list p {
+    margin: 4px 0 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  footer a {
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+
+<h1>tools</h1>
+<p class="lead">ペラいち PoC ツール集 — ビルドなし、外部依存なし、self-contained HTML</p>
+
+<ul class="tool-list">
+  <li>
+    <a href="llm-ja-check.html">LLM 日本語っぽさチェッカー</a>
+    <p>定型句・過剰表現を辞書ベースで検知</p>
+  </li>
+</ul>
+
+<footer>
+  <a href="https://github.com/wwwyo/tools" target="_blank" rel="noopener">github.com/wwwyo/tools</a>
+</footer>
+
+</body>
+</html>
