@@ -54,22 +54,26 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent 30px,
-    rgba(143, 168, 138, 0.28) 31px
-  );
 }
 
 textarea {
   width: 100%;
   min-height: 200px;
-  padding: 12px;
+  padding: 12px 16px;
   font-size: 1rem;
   font-family: inherit;
   border: none;
-  background: transparent;
+  /* 罫線は 1 行 = 30px の周期で行末の直下に引く。origin を content-box に
+     揃えることで文字行と一致し、attachment: local でスクロールに追随する */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 29px,
+    rgba(143, 168, 138, 0.28) 29px,
+    rgba(143, 168, 138, 0.28) 30px
+  );
+  background-origin: content-box;
+  background-attachment: local;
   color: var(--ink);
   resize: vertical;
   line-height: 30px;
