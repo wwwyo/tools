@@ -91,9 +91,7 @@ export function App() {
       </div>
 
       <div className="results">
-        {text.length === 0 ? (
-          <div className="placeholder">テキストを入力すると、ここに解析結果が表示されます。</div>
-        ) : (
+        {text.length === 0 ? null : (
           <>
             {result.isShort ? (
               <div className="short-notice">

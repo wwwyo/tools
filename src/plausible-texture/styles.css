@@ -112,14 +112,6 @@ button:hover {
   margin-top: 28px;
 }
 
-.placeholder {
-  color: var(--muted);
-  font-size: 0.9rem;
-  padding: 24px 0;
-  text-align: center;
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-}
 
 .score-card {
   position: relative;
