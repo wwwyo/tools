@@ -1,298 +1,67 @@
-:root {
-  color-scheme: light;
-  --paper: #fbfaf6;
-  --ink: #1f1b16;
-  --red: #c73e2e;
-  --rule: #8fa88a;
-  --muted: #8c857b;
-  --border: rgba(140, 133, 123, 0.35);
-  --card-bg: rgba(140, 133, 123, 0.06);
-}
-
-html,
-body {
-  background: var(--paper);
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
-  color: var(--ink);
-}
-
-.page {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 32px 16px 64px;
-  line-height: 1.8;
-}
-
-.header {
-  margin-bottom: 28px;
-}
-
-
-.header-text h1 {
-  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-  letter-spacing: 0.08em;
-  font-size: 2rem;
-  font-weight: 700;
-  margin: 0 0 8px;
-}
-
-.lead {
-  color: var(--muted);
-  font-size: 0.88rem;
-  margin: 0;
-}
-
-.paper-card {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-textarea {
-  display: block;
-  width: 100%;
-  min-height: 222px;
-  padding: 12px 16px 0;
-  font-size: 1rem;
-  font-family: inherit;
-  border: none;
-  /* 罫線は 1 行 = 30px の周期で行末の直下に引く。origin を content-box に
-     揃えることで文字行と一致し、attachment: local でスクロールに追随する */
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent 29px,
-    rgba(143, 168, 138, 0.28) 29px,
-    rgba(143, 168, 138, 0.28) 30px
-  );
-  background-origin: content-box;
-  background-attachment: local;
-  color: var(--ink);
-  resize: vertical;
-  line-height: 30px;
-}
-
-textarea::placeholder {
-  color: var(--muted);
-}
-
-textarea:focus-visible,
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--red);
-  outline-offset: 2px;
-}
-
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 8px;
-}
-
-.score-button {
-  color: var(--red);
-  border-color: var(--red);
-}
-
-button {
-  font-family: inherit;
-  font-size: 0.85rem;
-  padding: 6px 14px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: var(--ink);
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: var(--red);
-  color: var(--red);
-}
-
-.results {
-  margin-top: 28px;
-}
-
-
-.score-card {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px 120px 20px 20px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--card-bg);
-  margin-bottom: 24px;
-}
-
-.rank-stamp {
-  position: absolute;
-  right: 18px;
-  bottom: 12px;
-  width: 76px;
-  height: 76px;
-  border: 3px double var(--red);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transform: rotate(-8deg);
-  color: var(--red);
-  opacity: 0.9;
-  animation: stamp-in 140ms ease-out;
-  pointer-events: none;
-}
-
-.rank-stamp span {
-  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-  font-size: 2.4rem;
-  font-weight: 700;
-  line-height: 1;
-}
-
-@keyframes stamp-in {
-  from {
-    opacity: 0;
-    transform: rotate(-8deg) scale(1.4);
+/*
+ * Tailwind ユーティリティで表現しづらい 3 要素のみ残す:
+ * - textarea の罫線背景（repeating-linear-gradient + content-box 揃え + local 追随）
+ * - 検知 mark の赤波線（アンダーラインの装飾スタイルは任意値でも書けるが、
+ *   mark 標準の黄色背景リセットと合わせて 1 箇所にまとめた方が可読）
+ * - ランクスタンプの円形演出（border-double + rotate + keyframes アニメーション）
+ */
+@layer components {
+  .lined-textarea {
+    /* 罫線は 1 行 = 30px の周期で行末の直下に引く。origin を content-box に
+       揃えることで文字行と一致し、attachment: local でスクロールに追随する */
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 29px,
+      rgba(143, 168, 138, 0.28) 29px,
+      rgba(143, 168, 138, 0.28) 30px
+    );
+    background-origin: content-box;
+    background-attachment: local;
+    line-height: 30px;
   }
-  to {
-    opacity: 0.9;
-    transform: rotate(-8deg) scale(1);
-  }
-}
 
-@media (prefers-reduced-motion: reduce) {
+  .detected {
+    background: none;
+    color: inherit;
+    padding: 0;
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: var(--color-red);
+  }
+
   .rank-stamp {
-    animation: none;
+    position: absolute;
+    right: 18px;
+    bottom: 12px;
+    width: 76px;
+    height: 76px;
+    border: 3px double var(--color-red);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: rotate(-8deg);
+    color: var(--color-red);
+    opacity: 0.9;
+    animation: stamp-in 140ms ease-out;
+    pointer-events: none;
   }
-}
 
-.score-meta {
-  flex: 1;
-}
-
-.score-rank {
-  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-  letter-spacing: 0.05em;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--red);
-}
-
-.score-comment {
-  color: var(--muted);
-  font-size: 0.9rem;
-  margin-top: 4px;
-}
-
-.score-sub {
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin-top: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.short-notice {
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--card-bg);
-  color: var(--muted);
-  font-size: 0.9rem;
-  margin-bottom: 24px;
-}
-
-h2 {
-  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-  letter-spacing: 0.05em;
-  font-size: 1rem;
-  margin-bottom: 10px;
-  margin-top: 0;
-}
-
-.highlighted-box {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 16px;
-  background: var(--card-bg);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 0.95rem;
-  margin-bottom: 28px;
-}
-
-mark {
-  background: none;
-  color: inherit;
-  padding: 0;
-}
-
-mark.detected {
-  text-decoration-line: underline;
-  text-decoration-style: wavy;
-  text-decoration-color: var(--red);
-}
-
-.detect-group {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.detect-group h3 {
-  font-size: 0.82rem;
-  margin: 0 0 6px;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.detect-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-.detect-list li {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 0;
-  border-top: 1px solid var(--border);
-  font-size: 0.88rem;
-}
-
-.detect-list li:first-child {
-  border-top: none;
-}
-
-.detect-count {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--muted);
-}
-
-footer {
-  margin-top: 48px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-footer a {
-  color: var(--red);
-}
-
-@media (max-width: 480px) {
-  .page {
-    padding: 20px 12px 48px;
+  @keyframes stamp-in {
+    from {
+      opacity: 0;
+      transform: rotate(-8deg) scale(1.4);
+    }
+    to {
+      opacity: 0.9;
+      transform: rotate(-8deg) scale(1);
+    }
   }
-  .score-card {
-    flex-direction: column;
-    align-items: flex-start;
-    padding-right: 100px;
+
+  @media (prefers-reduced-motion: reduce) {
+    .rank-stamp {
+      animation: none;
+    }
   }
 }

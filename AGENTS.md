@@ -16,7 +16,7 @@
 tools/
 ├── src/
 │   ├── index.html       ツール一覧
-│   ├── global.css       共通の最小 reset（デザイントークンは各ツール側で定義）
+│   ├── global.css       Tailwind v4 エントリ（@import "tailwindcss" + @theme トークン）
 │   └── <appdir>/        各ツール（1 ツール = 1 ディレクトリ）
 │       ├── index.html   エントリ
 │       └── *.tsx など   実装（vanilla JS または React）
@@ -49,6 +49,7 @@ bun run deploy   # Cloudflare へデプロイ（build → wrangler deploy）
 ## 技術スタック
 
 - HTML / CSS / JS + Vite MPA（Vanilla JS または React。JSX 対応）
+- Tailwind CSS v4（@tailwindcss/vite。スタイルはユーティリティ class を基本とし、表現しづらいものだけ各ツールの CSS に @layer components で書く）
 - TypeScript（オプション、any は禁止）
 - Cloudflare Workers static assets（wrangler）
 - bun（パッケージ管理）

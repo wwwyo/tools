@@ -1,38 +1,36 @@
-/* 全ツール共通の最小 reset。デザイントークンは各ツール側で定義する */
+@import "tailwindcss";
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+@theme {
+  --color-paper: #fbfaf6;
+  --color-ink: #1f1b16;
+  --color-red: #c73e2e;
+  --color-muted: #8c857b;
+  --color-rule: #8fa88a;
+  --font-mincho: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+  --color-border: rgba(140, 133, 123, 0.35);
+  --color-card-bg: rgba(140, 133, 123, 0.06);
 }
 
-* {
-  margin: 0;
+:root {
+  color-scheme: light;
 }
 
-html {
-  -webkit-text-size-adjust: 100%;
-}
-
+/*
+ * Tailwind Preflight がカバーしない差分のみ残す:
+ * - Preflight の html line-height は 1.5 固定。元 reset は body line-height 1.6 だったため上書きが必要
+ * - -webkit-font-smoothing は Preflight 対象外
+ * - p/h1-h4 の overflow-wrap は Preflight 対象外
+ * - svg/canvas の max-width は Preflight が img/video にしか適用しないため対象外
+ */
 body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 
-img,
 svg,
-video,
 canvas {
-  display: block;
   max-width: 100%;
-}
-
-input,
-button,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
 }
 
 p,
