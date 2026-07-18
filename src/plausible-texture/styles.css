@@ -35,12 +35,6 @@ body {
   margin-bottom: 28px;
 }
 
-.power-ruby {
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  color: var(--red);
-  margin: 0 0 4px;
-}
 
 .header-text h1 {
   font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
@@ -224,48 +218,6 @@ h2 {
   margin-top: 0;
 }
 
-.legend {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 0;
-  margin: 0 0 12px;
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-.legend li {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.legend-sample {
-  color: var(--ink);
-}
-
-.legend-teikeiku .legend-sample {
-  text-decoration: underline wavy var(--red);
-}
-
-.legend-kyocho .legend-sample {
-  text-decoration: underline solid var(--red);
-}
-
-.legend-kango .legend-sample {
-  text-decoration: underline dotted var(--red);
-}
-
-.legend-enkyoku .legend-sample {
-  text-decoration: underline double var(--red);
-}
-
-.legend-setsuzoku .legend-sample {
-  background: rgba(199, 62, 46, 0.15);
-  padding: 0 2px;
-}
-
 .highlighted-box {
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -283,32 +235,10 @@ mark {
   padding: 0;
 }
 
-.mark-teikeiku {
+mark.detected {
   text-decoration-line: underline;
   text-decoration-style: wavy;
   text-decoration-color: var(--red);
-}
-
-.mark-kyocho {
-  text-decoration-line: underline;
-  text-decoration-style: solid;
-  text-decoration-color: var(--red);
-}
-
-.mark-kango {
-  text-decoration-line: underline;
-  text-decoration-style: dotted;
-  text-decoration-color: var(--red);
-}
-
-.mark-enkyoku {
-  text-decoration-line: underline;
-  text-decoration-style: double;
-  text-decoration-color: var(--red);
-}
-
-.mark-setsuzoku {
-  background: rgba(199, 62, 46, 0.15);
 }
 
 .detect-group {
