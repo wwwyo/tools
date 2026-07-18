@@ -35,10 +35,21 @@ function buildHighlightedNodes(text: string, nonOverlapping: Match[]): ReactNode
   return nodes;
 }
 
-function ScoreDisplay({ score, rank }: { score: number; rank: string }) {
+const wordSegmenter = new Intl.Segmenter("ja", { granularity: "word" });
+
+/** Intl.Segmenter による決定論的な単語数カウント（記号・空白は除く） */
+function countWords(text: string): number {
+  let count = 0;
+  for (const seg of wordSegmenter.segment(text)) {
+    if (seg.isWordLike) count++;
+  }
+  return count;
+}
+
+function RankStamp({ rank }: { rank: string }) {
   return (
-    <div className="score-display" key={score} aria-label={`薄さスコア ${score} ランク${rank}`}>
-      <span className="score-number">{score}</span>
+    <div className="rank-stamp" key={rank} aria-hidden="true">
+      <span>{rank}</span>
     </div>
   );
 }
@@ -46,6 +57,7 @@ function ScoreDisplay({ score, rank }: { score: number; rank: string }) {
 export function App() {
   const [text, setText] = useState("");
   const result = useMemo(() => analyze(text), [text]);
+  const wordCount = useMemo(() => countWords(text), [text]);
 
   const highlightedNodes = useMemo(
     () => buildHighlightedNodes(text, result.nonOverlapping),
@@ -88,18 +100,18 @@ export function App() {
               <div className="short-notice">
                 文章が短すぎます（100文字以上を推奨）
                 <br />
-                検知数 {result.matchCount} / 文字数 {result.charLength}
+                検知数 {result.matchCount} / 単語数 {wordCount}
               </div>
             ) : (
               <div className="score-card">
-                <ScoreDisplay score={result.score ?? 0} rank={result.rank ?? "-"} />
                 <div className="score-meta">
                   <div className="score-rank">ランク {result.rank}</div>
                   <div className="score-comment">{result.comment}</div>
                   <div className="score-sub">
-                    検知数 {result.matchCount} / 文字数 {result.charLength}
+                    検知数 {result.matchCount} / 単語数 {wordCount}
                   </div>
                 </div>
+                <RankStamp rank={result.rank ?? "-"} />
               </div>
             )}
 

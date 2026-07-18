@@ -14,4 +14,4 @@ bun run deploy # Cloudflare へデプロイ
 
 ## Tools
 
-- [llm-ja-check](src/llm-ja-check/) — LLM が日本語で使いがちなワードを決定論的に検知・採点する
+- [薄っぺらな嘘 — Plausible Texture](src/plausible-texture/) — LLM っぽい定型句を検知して剥がす
