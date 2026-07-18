@@ -6,129 +6,132 @@
 <title>tools</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --paper: #FBFAF6;
-    --ink: #1F1B16;
-    --red: #C73E2E;
-    --rule: #8FA88A;
-    --muted: #8C857B;
-    --border: rgba(140, 133, 123, 0.35);
-    --card-bg: rgba(140, 133, 123, 0.06);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --paper: #1B1916;
-      --ink: #E8E2D8;
-      --red: #E85B4A;
-      --muted: #A39A8C;
-      --border: rgba(232, 226, 216, 0.2);
-      --card-bg: rgba(232, 226, 216, 0.06);
-    }
+    color-scheme: dark;
+    --bg: #0C0C0E;
+    --ink: #F5F3EE;
+    --red: #E5462F;
+    --rule: #26262A;
+    --muted: #7A7A80;
   }
   * { box-sizing: border-box; }
-  html, body { background: var(--paper); }
+  html, body {
+    background: var(--bg);
+  }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
     max-width: 720px;
     margin: 0 auto;
-    padding: 32px 16px 64px;
+    padding: 40px 20px 80px;
     color: var(--ink);
     line-height: 1.8;
   }
   header {
     display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 28px;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 56px;
   }
-  .seal-mark {
-    width: 56px;
-    height: 56px;
-    flex-shrink: 0;
-    transform: rotate(-4deg);
+  .title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
   }
   h1 {
     font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-    letter-spacing: 0.05em;
-    font-size: 1.6rem;
-    margin: 0 0 4px;
-  }
-  p.lead {
-    color: var(--muted);
-    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    font-size: 2.4rem;
     margin: 0;
+  }
+  .accent {
+    color: var(--red);
+    font-size: 1.1rem;
+    font-weight: 400;
+  }
+  .gh-link {
+    color: var(--ink);
+    display: inline-flex;
+    padding: 4px;
+    line-height: 0;
+    transition: color 0.15s ease;
+  }
+  .gh-link:hover {
+    color: var(--red);
+  }
+  .gh-link:focus-visible {
+    outline: 2px solid var(--red);
+    outline-offset: 3px;
+    border-radius: 2px;
   }
   ul.tool-list {
     list-style: none;
     padding: 0;
     margin: 0;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--rule);
   }
   ul.tool-list li {
-    padding: 16px 4px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--rule);
   }
   ul.tool-list a {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--ink);
+    display: block;
+    padding: 22px 4px;
     text-decoration: none;
-    border-bottom: 1px solid transparent;
+    color: inherit;
   }
-  ul.tool-list a:hover,
-  ul.tool-list a:focus-visible {
+  .no {
+    display: block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
     color: var(--red);
+    margin-bottom: 6px;
+  }
+  .name {
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--ink);
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s ease;
+  }
+  ul.tool-list a:hover .name,
+  ul.tool-list a:focus-visible .name {
     border-bottom-color: var(--red);
   }
   ul.tool-list a:focus-visible {
     outline: 2px solid var(--red);
-    outline-offset: 2px;
+    outline-offset: -2px;
   }
-  ul.tool-list p {
-    margin: 4px 0 0;
+  .desc {
+    margin: 6px 0 0;
     font-size: 0.85rem;
     color: var(--muted);
-  }
-  footer {
-    margin-top: 48px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    font-size: 0.78rem;
-    color: var(--muted);
-  }
-  footer a {
-    color: var(--red);
-  }
-  footer a:focus-visible {
-    outline: 2px solid var(--red);
-    outline-offset: 2px;
   }
 </style>
 </head>
 <body>
 
 <header>
-  <svg class="seal-mark" viewBox="0 0 64 64" role="img" aria-label="赤い角印">
-    <rect x="4" y="4" width="56" height="56" fill="none" stroke="var(--red)" stroke-width="3" />
-    <rect x="9" y="9" width="46" height="46" fill="none" stroke="var(--red)" stroke-width="1.5" />
-    <text x="32" y="34" text-anchor="middle" dominant-baseline="central" fill="var(--red)" font-family="'Hiragino Mincho ProN', 'Yu Mincho', serif" font-size="30" font-weight="600">具</text>
-  </svg>
-  <div>
+  <div class="title">
     <h1>tools</h1>
-    <p class="lead">ペラいち PoC ツール集 — 外部依存なし、self-contained</p>
+    <span class="accent" aria-hidden="true">×</span>
   </div>
+  <a class="gh-link" href="https://github.com/wwwyo/tools" target="_blank" rel="noopener" aria-label="GitHub">
+    <svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+    </svg>
+  </a>
 </header>
 
 <ul class="tool-list">
   <li>
-    <a href="/llm-ja-check/">LLM 日本語っぽさチェッカー</a>
-    <p>定型句・過剰表現を辞書ベースで検知</p>
+    <a href="/llm-ja-check/">
+      <span class="no">No.001</span>
+      <span class="name">LLM 日本語っぽさチェッカー</span>
+      <p class="desc">定型句・過剰表現を辞書ベースで検知</p>
+    </a>
   </li>
 </ul>
-
-<footer>
-  <a href="https://github.com/wwwyo/tools" target="_blank" rel="noopener">github.com/wwwyo/tools</a>
-</footer>
 
 </body>
 </html>
