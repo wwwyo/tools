@@ -35,45 +35,10 @@ function buildHighlightedNodes(text: string, nonOverlapping: Match[]): ReactNode
   return nodes;
 }
 
-function SealMark() {
+function ScoreDisplay({ score, rank }: { score: number; rank: string }) {
   return (
-    <svg className="seal-mark" viewBox="0 0 64 64" role="img" aria-label="校正の角印">
-      <rect x="4" y="4" width="56" height="56" fill="none" stroke="var(--red)" strokeWidth="3" />
-      <rect x="9" y="9" width="46" height="46" fill="none" stroke="var(--red)" strokeWidth="1.5" />
-      <text
-        x="32"
-        y="40"
-        textAnchor="middle"
-        fontSize="30"
-        fill="var(--red)"
-        fontFamily='"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif'
-      >
-        校
-      </text>
-    </svg>
-  );
-}
-
-function HankoStamp({ score, rank }: { score: number; rank: string }) {
-  return (
-    <div className="hanko-stamp" key={score}>
-      <svg viewBox="0 0 120 120" role="img" aria-label={`検印 ランク${rank} スコア${score}`}>
-        <circle cx="60" cy="60" r="54" fill="none" stroke="var(--red)" strokeWidth="4" />
-        <circle cx="60" cy="60" r="46" fill="none" stroke="var(--red)" strokeWidth="1.5" />
-        <text
-          x="60"
-          y="62"
-          textAnchor="middle"
-          fontSize="40"
-          fill="var(--red)"
-          fontFamily='"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif'
-        >
-          {rank}
-        </text>
-        <text x="60" y="90" textAnchor="middle" fontSize="16" fill="var(--red)" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
-          {score}
-        </text>
-      </svg>
+    <div className="score-display" key={score} aria-label={`薄さスコア ${score} ランク${rank}`}>
+      <span className="score-number">{score}</span>
     </div>
   );
 }
@@ -92,11 +57,11 @@ export function App() {
   return (
     <div className="page">
       <header className="header">
-        <SealMark />
         <div className="header-text">
-          <h1>LLM 日本語っぽさチェッカー</h1>
+          <p className="power-ruby">プラウジブル・テクスチャー / Plausible Texture</p>
+          <h1>薄っぺらな嘘</h1>
           <p className="lead">
-            テキストを貼り付けると、LLM がよく使う定型句・過剰表現を辞書ベースで検知してスコア化します。
+            LLM が日本語で使いがちな、もっともらしい定型句を辞書だけで検知します。
           </p>
         </div>
       </header>
@@ -105,7 +70,7 @@ export function App() {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="ここに原稿を貼り付けてください"
+          placeholder="ここに文章を貼ると、膜を剥がします"
         />
       </div>
       <div className="toolbar">
@@ -127,7 +92,7 @@ export function App() {
               </div>
             ) : (
               <div className="score-card">
-                <HankoStamp score={result.score ?? 0} rank={result.rank ?? "-"} />
+                <ScoreDisplay score={result.score ?? 0} rank={result.rank ?? "-"} />
                 <div className="score-meta">
                   <div className="score-rank">ランク {result.rank}</div>
                   <div className="score-comment">{result.comment}</div>
@@ -138,7 +103,7 @@ export function App() {
               </div>
             )}
 
-            <h2>校正紙</h2>
+            <h2>剥がれた膜</h2>
             <ul className="legend">
               {LEGEND.map((l) => (
                 <li key={l.category} className={l.markerClass}>
@@ -149,7 +114,7 @@ export function App() {
             </ul>
             <div className="highlighted-box">{highlightedNodes.length > 0 ? highlightedNodes : "(空)"}</div>
 
-            <h2>検知リスト</h2>
+            <h2>検出された定型句</h2>
             {hasAnyDetect ? (
               CATEGORY_ORDER.map((cat) => {
                 const group = result.byCategory[cat];

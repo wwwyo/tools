@@ -210,11 +210,11 @@ export function computeScore(rawWeightSum: number, charLength: number): number {
 }
 
 export function rankFromScore(score: number): { rank: string; comment: string } {
-  if (score >= 90) return { rank: "S", comment: "人間の文章です" };
-  if (score >= 75) return { rank: "A", comment: "自然な文章、たまに顔を出すAI感" };
-  if (score >= 55) return { rank: "B", comment: "AIっぽさがそこそこ香ります" };
-  if (score >= 35) return { rank: "C", comment: "だいぶAI、推敲の余地あり" };
-  return { rank: "D", comment: "ほぼAIの香り" };
+  if (score >= 90) return { rank: "S", comment: "素の文章です" };
+  if (score >= 75) return { rank: "A", comment: "ほぼ地の文" };
+  if (score >= 55) return { rank: "B", comment: "ところどころ膜が見える" };
+  if (score >= 35) return { rank: "C", comment: "かなり薄っぺらい" };
+  return { rank: "D", comment: "ぺらっぺらです" };
 }
 
 export function groupByCategory(allMatches: Match[]): Record<Category, CategoryGroup> {

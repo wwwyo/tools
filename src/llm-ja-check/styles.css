@@ -9,18 +9,6 @@
   --card-bg: rgba(140, 133, 123, 0.06);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #1b1916;
-    --ink: #e8e2d8;
-    --red: #e85b4a;
-    --rule: #8fa88a;
-    --muted: #a39a8c;
-    --border: rgba(232, 226, 216, 0.2);
-    --card-bg: rgba(232, 226, 216, 0.06);
-  }
-}
-
 * {
   box-sizing: border-box;
 }
@@ -44,24 +32,22 @@ body {
 }
 
 .header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
   margin-bottom: 28px;
 }
 
-.seal-mark {
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
-  transform: rotate(-4deg);
+.power-ruby {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--red);
+  margin: 0 0 4px;
 }
 
 .header-text h1 {
   font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
-  letter-spacing: 0.05em;
-  font-size: 1.5rem;
-  margin: 0 0 4px;
+  letter-spacing: 0.08em;
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 8px;
 }
 
 .lead {
@@ -152,27 +138,35 @@ button:hover {
   margin-bottom: 24px;
 }
 
-.hanko-stamp {
-  width: 96px;
-  height: 96px;
+.score-display {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   flex-shrink: 0;
-  transform: rotate(-6deg);
-  animation: stamp-in 120ms ease-out;
+  animation: score-in 120ms ease-out;
 }
 
-@keyframes stamp-in {
+.score-number {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 2.6rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1;
+}
+
+@keyframes score-in {
   from {
     opacity: 0;
-    transform: rotate(-6deg) scale(1.4);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: rotate(-6deg) scale(1);
+    transform: translateY(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hanko-stamp {
+  .score-display {
     animation: none;
   }
 }
@@ -186,6 +180,7 @@ button:hover {
   letter-spacing: 0.05em;
   font-size: 1.1rem;
   font-weight: 700;
+  color: var(--red);
 }
 
 .score-comment {
