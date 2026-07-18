@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --paper: #fbfaf6;
   --ink: #1f1b16;
   --red: #c73e2e;
@@ -7,10 +7,6 @@
   --muted: #8c857b;
   --border: rgba(140, 133, 123, 0.35);
   --card-bg: rgba(140, 133, 123, 0.06);
-}
-
-* {
-  box-sizing: border-box;
 }
 
 html,
@@ -21,7 +17,6 @@ body {
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
   color: var(--ink);
-  margin: 0;
 }
 
 .page {

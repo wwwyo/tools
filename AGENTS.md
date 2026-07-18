@@ -16,6 +16,7 @@
 tools/
 ├── src/
 │   ├── index.html       ツール一覧
+│   ├── global.css       共通の最小 reset（デザイントークンは各ツール側で定義）
 │   └── <appdir>/        各ツール（1 ツール = 1 ディレクトリ）
 │       ├── index.html   エントリ
 │       └── *.tsx など   実装（vanilla JS または React）
