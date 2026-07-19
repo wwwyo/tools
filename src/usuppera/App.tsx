@@ -83,7 +83,7 @@ export function App() {
         </div>
       </header>
 
-      <div className="relative overflow-hidden rounded border border-border">
+      <div className="relative overflow-hidden">
         <div
           ref={backdropRef}
           aria-hidden="true"
@@ -96,7 +96,7 @@ export function App() {
           </div>
         </div>
         <textarea
-          className="relative block min-h-[216px] w-full resize-y border-0 bg-transparent px-4 py-0 text-base text-transparent caret-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-2"
+          className="relative block min-h-[216px] w-full resize-y border-0 bg-transparent px-4 py-0 text-base leading-[36px] text-transparent caret-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-2"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={(e) => {
