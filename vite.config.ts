@@ -1,11 +1,19 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, transformWithEsbuild, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { createElement, Fragment, type ComponentType, type ReactNode } from 'react';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { renderOgPng } from './src/og/render';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// og:image / og:url は絶対 URL でないとクローラが解決できないため、相対パスにはできない
+const SITE_URL = 'https://tools.wwwyo.dev';
+
+// src/og/ は OGP のデモページで、ツールではない（一覧にも出さないし OGP 自体も生成しない）
+const NON_TOOL_DIRS = new Set(['og']);
 
 // src/index.html と src/<appdir>/index.html をエントリとして自動検出する
 function discoverHtmlEntries(): Record<string, string> {
@@ -28,7 +36,7 @@ function discoverTools(): ToolMeta[] {
   for (const entry of readdirSync(srcDir, { withFileTypes: true }).sort((a, b) =>
     a.name.localeCompare(b.name),
   )) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory() || NON_TOOL_DIRS.has(entry.name)) continue;
     const htmlPath = join(srcDir, entry.name, 'index.html');
     if (!existsSync(htmlPath)) continue;
     const html = readFileSync(htmlPath, 'utf-8');
@@ -113,10 +121,146 @@ function toolListPlugin(): Plugin {
   };
 }
 
+// トップページの説明文。src/index.html には description meta を書かせていない（自明な
+// 定型文をツール側に書かせるのは避ける方針）ため、OGP 用にここへ直接持つ
+const SITE_DESCRIPTION = 'ペラいち PoC 置き場';
+
+type OgCard = { name: string; number?: string; title: string; description: string };
+
+// OGP を持つページの一覧。name はそのまま /og/<name>.png になる。
+// dev middleware / build / デモページ / meta 注入がすべてこの 1 つを見ることで、
+// トップページの特別扱いが各所に散らないようにする
+function discoverOgCards(): OgCard[] {
+  const tools = discoverTools().map((tool, i) => ({
+    name: tool.dir,
+    number: toolListNumber(i),
+    title: tool.title,
+    description: tool.description,
+  }));
+  return [{ name: 'index', title: 'tools', description: SITE_DESCRIPTION }, ...tools];
+}
+
+// src/<dir>/og.tsx があるツールだけ satori 用の preview 要素を返す。無ければ undefined
+// (= テキストのみのカードにフォールバック)。og.tsx を持つことをツールの必須要件にはしない。
+//
+// `bun run dev` の直接実行では bun ランタイムが .tsx を native import できるため
+// `import(pathToFileURL(...).href)` がそのまま動く。しかし `vite build` は rolldown 経由で
+// プラグインを Node の ESM ローダー上で実行するため、そちらは .tsx を解釈できず
+// ERR_UNKNOWN_FILE_EXTENSION で落ちる（bun run build で確認済み）。dev/build 双方で同じ経路
+// にするため、常に esbuild でトランスパイルしてから data: URL 経由で import するフォールバック
+// 方式に統一する。og.tsx 側は外部 import を持たない前提（bare specifier はデータ URL からだと
+// 解決できない）なので、JSX ランタイムだけは import 文を発生させない classic jsx transform +
+// globalThis 経由の橋渡しで解決する
+function installOgJsxGlobals(): void {
+  const globals = globalThis as unknown as {
+    __ogJsx?: typeof createElement;
+    __ogJsxFragment?: typeof Fragment;
+  };
+  globals.__ogJsx = createElement;
+  globals.__ogJsxFragment = Fragment;
+}
+
+// dev で og.tsx を編集 → リロードした結果を即反映させたいのでソースをキャッシュしない
+async function loadOgPreview(dir: string): Promise<ReactNode | undefined> {
+  const ogPath = join(__dirname, 'src', dir, 'og.tsx');
+  if (!existsSync(ogPath)) return undefined;
+  const source = readFileSync(ogPath, 'utf-8');
+  const { code } = await transformWithEsbuild(source, ogPath, {
+    jsx: 'transform',
+    jsxFactory: '__ogJsx',
+    jsxFragment: '__ogJsxFragment',
+    format: 'esm',
+  });
+  installOgJsxGlobals();
+  const mod = (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)) as {
+    default: ComponentType;
+  };
+  return createElement(mod.default);
+}
+
+// ctx.path ("/usuppera/index.html" や "/index.html") を discoverOgCards() の name に対応させる
+function ogCardNameFromPath(path: string): string | null {
+  if (path === '/index.html') return 'index';
+  const m = path.match(/^\/([^/]+)\/index\.html$/);
+  return m?.[1] ?? null;
+}
+
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+// OGP 画像 (satori + resvg で PNG 化) の生成と meta 注入を行う
+// - dev: /og/<dir>.png へのリクエストを都度レンダリングして返す（キャッシュしない。調整中の即時反映を優先）
+// - build: 全ツール + トップページ分の PNG を dist/og/ に emit する
+// - 全エントリの <head> に og:image 等の meta タグを注入する
+function ogPlugin(): Plugin {
+  return {
+    name: 'og',
+    resolveId(id) {
+      if (id === 'virtual:og-cards') return '\0virtual:og-cards';
+      return undefined;
+    },
+    load(id) {
+      if (id !== '\0virtual:og-cards') return undefined;
+      return `export const ogCards = ${JSON.stringify(discoverOgCards())};`;
+    },
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const match = req.url?.match(/^\/og\/([^/]+)\.png$/);
+        if (!match) return next();
+        const card = discoverOgCards().find((c) => c.name === match[1]);
+        if (!card) return next();
+        const preview = await loadOgPreview(card.name);
+        res.setHeader('Content-Type', 'image/png');
+        res.end(await renderOgPng({ ...card, preview }));
+      });
+    },
+    async generateBundle() {
+      await Promise.all(
+        discoverOgCards().map(async (card) => {
+          const preview = await loadOgPreview(card.name);
+          this.emitFile({
+            type: 'asset',
+            fileName: `og/${card.name}.png`,
+            source: await renderOgPng({ ...card, preview }),
+          });
+        }),
+      );
+    },
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html, ctx) {
+        const name = ogCardNameFromPath(ctx.path);
+        const card = name ? discoverOgCards().find((c) => c.name === name) : undefined;
+        if (!card) return html;
+        const url = card.name === 'index' ? SITE_URL : `${SITE_URL}/${card.name}/`;
+        const tags = [
+          `<meta property="og:title" content="${escapeAttr(card.title)}">`,
+          `<meta property="og:description" content="${escapeAttr(card.description)}">`,
+          `<meta property="og:type" content="website">`,
+          `<meta property="og:url" content="${url}">`,
+          `<meta property="og:image" content="${SITE_URL}/og/${card.name}.png">`,
+          `<meta property="og:image:width" content="1200">`,
+          `<meta property="og:image:height" content="630">`,
+          `<meta name="twitter:card" content="summary_large_image">`,
+        ].join('\n');
+        return html.replace(/(<\/head>)/, `${tags}\n$1`);
+      },
+    },
+  };
+}
+
 export default defineConfig({
   root: 'src',
   server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
-  plugins: [faviconPlugin(), headerPlugin(), toolListPlugin(), react(), tailwindcss()],
+  plugins: [
+    faviconPlugin(),
+    headerPlugin(),
+    toolListPlugin(),
+    ogPlugin(),
+    react(),
+    tailwindcss(),
+  ],
   build: {
     outDir: '../dist',
     emptyOutDir: true,
