@@ -15,3 +15,7 @@ bun run deploy # Cloudflare へデプロイ
 ## Tools
 
 - [薄っぺらな戯](src/usuppera/) — LLM っぽい定型句を検知して剥がす
+
+## License
+
+[MIT](LICENSE)
