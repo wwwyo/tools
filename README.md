@@ -2,6 +2,8 @@
 
 ペラいちの PoC ツール集。1 ツール = 1 ディレクトリで作り、Cloudflare に deploy している。
 
+公開先: https://tools.wwwyo.dev
+
 ## Getting Started
 
 ```bash
