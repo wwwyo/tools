@@ -18,15 +18,15 @@
  */
 @layer components {
   .lined-textarea {
-    /* 行高 36px。文字のインクは帯の 10〜26px を占める。罫線は 31px に引き、
-       文字との間に 5px 程度の余白を取る（ギチギチにしない） */
+    /* 行高 36px。文字のインクは帯の 10〜26px を占める。罫線は 33px に引き、
+       文字との間に 7px 程度の余白を取る（ギチギチにしない） */
     background-image: repeating-linear-gradient(
       to bottom,
       transparent 0,
-      transparent 30px,
-      rgba(143, 168, 138, 0.28) 30px,
-      rgba(143, 168, 138, 0.28) 31px,
-      transparent 31px,
+      transparent 32px,
+      rgba(143, 168, 138, 0.28) 32px,
+      rgba(143, 168, 138, 0.28) 33px,
+      transparent 33px,
       transparent 36px
     );
     line-height: 36px;
