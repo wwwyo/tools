@@ -45,11 +45,12 @@ function TextBlock({
 }: Omit<OgMeta, 'preview'> & { compact: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Sawarabi Mincho は 400 しか持たず、satori はブラウザと違って合成太字を作らない。
+          fontWeight を指定しても効かないので書かない */}
       <span
         style={{
           display: 'flex',
           fontSize: compact ? 56 : 72,
-          fontWeight: 700,
           lineHeight: 1.3,
           color: COLORS.foreground,
         }}

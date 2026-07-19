@@ -23,7 +23,7 @@ appEl.innerHTML = `
     <div class="flex flex-col gap-6">
       <header class="flex flex-col gap-1.5">
         <h1 class="font-serif text-2xl font-bold">五滴</h1>
-        <p class="text-sm text-muted-foreground">画像を貼り付けると、使用色の面積比 top5 を五滴抽出します。</p>
+        <p class="text-sm text-muted-foreground">画像を貼り付けると、使用色の面積比 Top 5 を五滴抽出します。</p>
       </header>
 
       <div
@@ -54,7 +54,7 @@ appEl.innerHTML = `
 
       <section id="result-section" class="hidden flex-col gap-2">
         <div class="flex items-center justify-between gap-2">
-          <h2 class="text-sm font-bold text-muted-foreground">使用色 top5（面積比順）</h2>
+          <h2 class="text-sm font-bold text-muted-foreground">使用色 Top 5（面積比順）</h2>
           <div class="flex items-center gap-2">
             <div
               id="format-toggle"

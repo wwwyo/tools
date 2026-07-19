@@ -69,27 +69,35 @@ export default function UsupperaOgPreview() {
         ))}
       </div>
 
-      {/* ランクスタンプ相当。右下に赤の二重丸でランク文字を置く */}
+      {/* ランクスタンプ相当。右下に赤の二重丸でランク文字を置き、その左に判定コメントを添える */}
       <div
         style={{
           display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'center',
           position: 'absolute',
           right: 48,
           bottom: 48,
-          width: 130,
-          height: 130,
-          borderRadius: 65,
-          // satori は `border: <width> double <color>` の一括指定を解釈しないため個別指定にする
-          borderStyle: 'double',
-          borderWidth: 6,
-          borderColor: '#c73e2e',
-          alignItems: 'center',
-          justifyContent: 'center',
+          gap: 28,
         }}
       >
-        <span style={{ display: 'flex', fontSize: 56, fontWeight: 700, color: '#c73e2e' }}>
-          D
-        </span>
+        <span style={{ display: 'flex', fontSize: 30, color: '#7a7367' }}>ぺらっぺらです</span>
+        <div
+          style={{
+            display: 'flex',
+            width: 130,
+            height: 130,
+            borderRadius: 65,
+            // satori は `border: <width> double <color>` の一括指定を解釈しないため個別指定にする
+            borderStyle: 'double',
+            borderWidth: 6,
+            borderColor: '#c73e2e',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <span style={{ display: 'flex', fontSize: 56, color: '#c73e2e' }}>D</span>
+        </div>
       </div>
     </div>
   );
