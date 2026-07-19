@@ -9,14 +9,15 @@
   .lined-textarea {
     /* 罫線は 1 行 = 36px の周期で行末の直下に引く。origin を content-box に
        揃えることで文字行と一致し、attachment: local でスクロールに追随する */
-    /* 行高 36px。罫線は帯の真ん中よりやや下（下から 40% ≒ 22px）に引く */
+    /* 行高 36px。文字のインクは帯の 10〜26px を占めるため、罫線はその直下
+       30px に引く（これより上だと文字に隠れて線が途切れて見える） */
     background-image: repeating-linear-gradient(
       to bottom,
       transparent 0,
-      transparent 21px,
-      rgba(143, 168, 138, 0.28) 21px,
-      rgba(143, 168, 138, 0.28) 22px,
-      transparent 22px,
+      transparent 29px,
+      rgba(143, 168, 138, 0.28) 29px,
+      rgba(143, 168, 138, 0.28) 30px,
+      transparent 30px,
       transparent 36px
     );
     line-height: 36px;
