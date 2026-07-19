@@ -70,6 +70,23 @@ function headerPlugin(): Plugin {
   };
 }
 
+// 全エントリの <head> へ favicon を差し込む（ツール側に書かせない）
+function faviconPlugin(): Plugin {
+  return {
+    name: 'favicon',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html) {
+        const links = [
+          '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">',
+          '<link rel="apple-touch-icon" href="/apple-touch-icon.png">',
+        ].join('\n');
+        return html.replace(/(<\/head>)/, `${links}\n$1`);
+      },
+    },
+  };
+}
+
 // src/index.html のツール一覧を <!-- TOOL_LIST --> プレースホルダに差し込む
 function toolListPlugin(): Plugin {
   return {
@@ -99,7 +116,7 @@ function toolListPlugin(): Plugin {
 export default defineConfig({
   root: 'src',
   server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
-  plugins: [headerPlugin(), toolListPlugin(), react(), tailwindcss()],
+  plugins: [faviconPlugin(), headerPlugin(), toolListPlugin(), react(), tailwindcss()],
   build: {
     outDir: '../dist',
     emptyOutDir: true,
