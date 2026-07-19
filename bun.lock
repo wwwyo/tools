@@ -5,6 +5,8 @@
     "": {
       "name": "tools",
       "dependencies": {
+        "@fontsource/sawarabi-gothic": "5.2.9",
+        "@fontsource/sawarabi-mincho": "5.2.8",
         "react": "19.2.7",
         "react-dom": "19.2.7",
       },
@@ -95,6 +97,10 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.28.1", "", { "os": "win32", "cpu": "ia32" }, "sha512-zvb/mB2bSCoJOpoCBgYKKpX6YM6mJBlBUVUtVj41DlZJVEB6/0CKlRYxP5wWl1C1ILiCoAU5wZZ4q1P3qeS6Eg=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.1", "", { "os": "win32", "cpu": "x64" }, "sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A=="],
+
+    "@fontsource/sawarabi-gothic": ["@fontsource/sawarabi-gothic@5.2.9", "", {}, "sha512-Pcrjm39+wn/gTn+RaSzORQufSThANbhqp/DlFRaSO2IUDmWWNN+R5/sV8q8W7cxeRY6pwm/FmtDd3oZFz3Qz7w=="],
+
+    "@fontsource/sawarabi-mincho": ["@fontsource/sawarabi-mincho@5.2.8", "", {}, "sha512-wRv0jXX1RlwDCHlWX/kKVwwD5yb0yQ944Z9ep0wBzXw8UeIM3ITMG86ms0jvQLkXreyTIGhA45LI4W6B/u8lIA=="],
 
     "@img/colour": ["@img/colour@1.1.0", "", {}, "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ=="],
 

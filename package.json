@@ -19,6 +19,8 @@
     "wrangler": "4.110.0"
   },
   "dependencies": {
+    "@fontsource/sawarabi-gothic": "5.2.9",
+    "@fontsource/sawarabi-mincho": "5.2.8",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   }

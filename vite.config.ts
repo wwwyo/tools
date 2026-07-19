@@ -82,10 +82,10 @@ function toolListPlugin(): Plugin {
         const items = tools
           .map(
             (tool, i) => `  <li class="border-b border-b-[rgba(31,27,22,0.16)]">
-    <a class="group block px-1 py-[30px] text-inherit no-underline focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-[-2px]" href="/${tool.dir}/">
-      <span class="mb-1.5 block font-mono text-[0.72rem] tracking-[0.08em] text-red">${toolListNumber(i)}</span>
-      <span class="font-mincho text-[1.3rem] font-bold text-ink">${tool.title}</span>
-      <p class="mt-1.5 mb-0 text-[0.85rem] text-muted">${tool.description}</p>
+    <a class="group block px-1 py-[30px] text-inherit no-underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px]" href="/${tool.dir}/">
+      <span class="mb-1.5 block font-mono text-xs tracking-[0.08em] text-primary">${toolListNumber(i)}</span>
+      <span class="font-serif text-xl font-bold text-foreground">${tool.title}</span>
+      <p class="mt-1.5 mb-0 text-sm text-muted-foreground">${tool.description}</p>
     </a>
   </li>`,
           )

@@ -1,4 +1,5 @@
 import "../global.css";
+import "./styles.css";
 import { formatColor, type ColorFormat } from "./colorFormat";
 import { extractTopColors, getResizedImageData, type ColorResult } from "./colorQuantize";
 
@@ -21,39 +22,39 @@ appEl.innerHTML = `
   <main class="relative z-20 mx-auto flex max-w-xl flex-col px-5 py-10">
     <div class="flex flex-col gap-6">
       <header class="flex flex-col gap-1.5">
-        <h1 class="font-mincho text-2xl font-bold">五滴</h1>
-        <p class="text-sm text-muted">画像を貼り付けると、使用色の面積比 top5 を五滴抽出します。</p>
+        <h1 class="font-serif text-2xl font-bold">五滴</h1>
+        <p class="text-sm text-muted-foreground">画像を貼り付けると、使用色の面積比 top5 を五滴抽出します。</p>
       </header>
 
       <div
         id="dropzone"
         tabindex="0"
-        class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded border border-dashed border-border px-4 py-10 text-center transition-colors focus-visible:outline-2 focus-visible:outline-red"
+        class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded border border-dashed border-border px-4 py-10 text-center transition-colors focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <p class="text-sm text-ink">
-          ここに画像をドラッグ&ドロップ / クリックで選択 / <kbd class="rounded border border-border bg-paper px-1 py-0.5 text-xs">Cmd+V</kbd> で貼り付け
+        <p class="text-sm text-foreground">
+          ここに画像をドラッグ&ドロップ / クリックで選択 / <kbd class="rounded border border-border bg-muted px-1 py-0.5 text-xs">Cmd+V</kbd> で貼り付け
         </p>
-        <p class="text-xs text-muted">Canvas 上で解析するのみで、画像は外部に送信されません</p>
+        <p class="text-xs text-muted-foreground">Canvas 上で解析するのみで、画像は外部に送信されません</p>
       </div>
       <div class="-mt-4 flex justify-end">
         <button
           type="button"
           id="sample-button"
-          class="rounded border border-border px-2.5 py-1 text-xs text-ink transition-colors hover:bg-paper focus-visible:outline-2 focus-visible:outline-red"
+          class="rounded border border-border px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
         >サンプル画像で試す</button>
       </div>
       <input id="file-input" type="file" accept="image/*" class="hidden" />
 
-      <p id="error" class="hidden text-sm text-red" role="alert"></p>
+      <p id="error" class="hidden text-sm text-destructive" role="alert"></p>
 
       <section id="preview-section" class="hidden flex-col gap-2">
-        <h2 class="text-sm font-bold text-muted">プレビュー</h2>
+        <h2 class="text-sm font-bold text-muted-foreground">プレビュー</h2>
         <img id="preview-image" alt="貼り付けた画像のプレビュー" class="max-h-64 w-auto rounded border border-border object-contain" />
       </section>
 
       <section id="result-section" class="hidden flex-col gap-2">
         <div class="flex items-center justify-between gap-2">
-          <h2 class="text-sm font-bold text-muted">使用色 top5（面積比順）</h2>
+          <h2 class="text-sm font-bold text-muted-foreground">使用色 top5（面積比順）</h2>
           <div class="flex items-center gap-2">
             <div
               id="format-toggle"
@@ -68,7 +69,7 @@ appEl.innerHTML = `
             <button
               type="button"
               id="copy-all-button"
-              class="shrink-0 rounded border border-border px-2.5 py-1 text-xs text-ink transition-colors hover:bg-paper focus-visible:outline-2 focus-visible:outline-red"
+              class="shrink-0 rounded border border-border px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
             >一括copy</button>
           </div>
         </div>
@@ -197,9 +198,9 @@ function updateFormatToggleUi(): void {
   const buttons = formatToggleEl.querySelectorAll<HTMLButtonElement>(".format-toggle-btn");
   for (const buttonEl of buttons) {
     const isActive = buttonEl.dataset.format === currentFormat;
-    buttonEl.classList.toggle("bg-ink", isActive);
+    buttonEl.classList.toggle("bg-foreground", isActive);
     buttonEl.classList.toggle("text-white", isActive);
-    buttonEl.classList.toggle("text-muted", !isActive);
+    buttonEl.classList.toggle("text-muted-foreground", !isActive);
   }
 }
 
@@ -220,11 +221,11 @@ function renderColors(colors: ColorResult[]): void {
     infoEl.className = "flex flex-1 flex-col gap-0.5";
 
     const codeEl = document.createElement("span");
-    codeEl.className = "font-mono text-sm text-ink";
+    codeEl.className = "font-mono text-sm text-foreground";
     codeEl.textContent = formatColor(color, currentFormat);
 
     const ratioEl = document.createElement("span");
-    ratioEl.className = "text-xs text-muted";
+    ratioEl.className = "text-xs text-muted-foreground";
     ratioEl.textContent = `${color.ratio.toFixed(1)}%`;
 
     infoEl.append(codeEl, ratioEl);
@@ -232,7 +233,7 @@ function renderColors(colors: ColorResult[]): void {
     const copyButtonEl = document.createElement("button");
     copyButtonEl.type = "button";
     copyButtonEl.className =
-      "shrink-0 rounded border border-border px-2.5 py-1 text-xs text-ink transition-colors hover:bg-paper focus-visible:outline-2 focus-visible:outline-red";
+      "shrink-0 rounded border border-border px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring";
     copyButtonEl.textContent = "copy";
     copyButtonEl.addEventListener("click", () => {
       void copyText(formatColor(color, currentFormat)).then((ok) => {
@@ -405,16 +406,16 @@ fileInputEl.addEventListener("change", () => {
 
 dropzoneEl.addEventListener("dragover", (event) => {
   event.preventDefault();
-  dropzoneEl.classList.add("border-red");
+  dropzoneEl.classList.add("border-primary");
 });
 
 dropzoneEl.addEventListener("dragleave", () => {
-  dropzoneEl.classList.remove("border-red");
+  dropzoneEl.classList.remove("border-primary");
 });
 
 dropzoneEl.addEventListener("drop", (event) => {
   event.preventDefault();
-  dropzoneEl.classList.remove("border-red");
+  dropzoneEl.classList.remove("border-primary");
   const file = event.dataTransfer?.files?.[0];
   if (file) void handleFile(file);
 });

@@ -1,3 +1,14 @@
+:root {
+  --background: #fbfaf6;
+  --foreground: #1f1b16;
+  --primary: #c73e2e;
+  --ring: #c73e2e;
+  --muted: rgba(140, 133, 123, 0.06);
+  /* #8c857b は白背景でコントラスト比 3.4:1 と AA を下回るため 4.7:1 まで締めている */
+  --muted-foreground: #7a7367;
+  --border: rgba(140, 133, 123, 0.35);
+}
+
 /*
  * Tailwind ユーティリティで表現しづらい 3 要素のみ残す:
  * - textarea の罫線背景（repeating-linear-gradient + content-box 揃え + local 追随）
@@ -7,20 +18,18 @@
  */
 @layer components {
   .lined-textarea {
-    /* 罫線は 1 行 = 36px の周期で行末の直下に引く。origin を content-box に
-       揃えることで文字行と一致し、attachment: local でスクロールに追随する */
-    /* 行高 36px。文字のインクは帯の 10〜26px を占めるため、罫線はその直下
-       30px に引く（これより上だと文字に隠れて線が途切れて見える） */
+    /* 行高 40px。文字のインクは帯の 12〜28px を占めるため、罫線はその直下
+       33px に引く（これより上だと文字に隠れて線が途切れて見える） */
     background-image: repeating-linear-gradient(
       to bottom,
       transparent 0,
-      transparent 29px,
-      rgba(143, 168, 138, 0.28) 29px,
-      rgba(143, 168, 138, 0.28) 30px,
-      transparent 30px,
-      transparent 36px
+      transparent 32px,
+      rgba(143, 168, 138, 0.28) 32px,
+      rgba(143, 168, 138, 0.28) 33px,
+      transparent 33px,
+      transparent 40px
     );
-    line-height: 36px;
+    line-height: 40px;
   }
 
   .detected {
@@ -29,7 +38,7 @@
     padding: 0;
     text-decoration-line: underline;
     text-decoration-style: wavy;
-    text-decoration-color: var(--color-red);
+    text-decoration-color: var(--primary);
   }
 
   .rank-stamp {
@@ -38,13 +47,13 @@
     bottom: 12px;
     width: 76px;
     height: 76px;
-    border: 3px double var(--color-red);
+    border: 3px double var(--primary);
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     transform: rotate(-8deg);
-    color: var(--color-red);
+    color: var(--primary);
     opacity: 0.9;
     animation: stamp-in 140ms ease-out;
     pointer-events: none;
