@@ -12,6 +12,7 @@
 - font-size は semantic scale（`text-xs` / `text-sm` / `text-base` / `text-lg` …）を使い、`text-[0.9rem]` のような arbitrary 値は避ける
 - 外部 CDN / API に依存しない。決定論的なロジックはすべてページ内 JS で完結させる
 - ツール一覧は各ツールの `index.html` の `<title>` / `<meta name="description">` からビルド時に自動生成される（Vite はビルド時に `src/<appdir>/index.html` を自動検出し、`src/index.html` の一覧を手で足す必要はない）
+- OGP 画像も同じ `<title>` / `<meta name="description">` からビルド時に自動生成される。ツールを追加するときと `src/<appdir>/og.tsx`（OGP に載せる画面ミニチュア）を書くときは `.claude/skills/add-tool` を読む
 - 完成度より出荷速度。動いたら build して deploy して post する
 
 ## ディレクトリ構造
