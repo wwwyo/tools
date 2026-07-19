@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/*
+ * Tailwind の自動検出はこの CSS の位置（src/）を起点にするため、リポジトリルートの
+ * vite.config.ts に埋まっているツール一覧のマークアップを拾えない。明示的に読ませる
+ */
+@source "../vite.config.ts";
+
 @theme {
   --color-paper: #fbfaf6;
   --color-ink: #1f1b16;
