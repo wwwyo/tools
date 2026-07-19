@@ -7,16 +7,16 @@
  */
 @layer components {
   .lined-textarea {
-    /* 罫線は 1 行 = 30px の周期で行末の直下に引く。origin を content-box に
+    /* 罫線は 1 行 = 36px の周期で行末の直下に引く。origin を content-box に
        揃えることで文字行と一致し、attachment: local でスクロールに追随する */
     background-image: repeating-linear-gradient(
       to bottom,
       transparent 0,
-      transparent 29px,
-      rgba(143, 168, 138, 0.28) 29px,
-      rgba(143, 168, 138, 0.28) 30px
+      transparent 35px,
+      rgba(143, 168, 138, 0.28) 35px,
+      rgba(143, 168, 138, 0.28) 36px
     );
-    line-height: 30px;
+    line-height: 36px;
   }
 
   .detected {
