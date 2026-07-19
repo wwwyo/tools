@@ -10,6 +10,9 @@ export type OgMeta = {
   // ツールが src/<appdir>/og.tsx を持つ場合のみ渡される画面ミニチュア。無ければ
   // テキストのみの従来レイアウトを維持する
   preview?: ReactNode;
+  // トップページにだけ添えるアイコンの src。satori はローカルパスを読めないので
+  // 画像生成側は data URL、ブラウザで描画するデモページは公開パスを渡す
+  iconSrc?: string;
 };
 
 // src/index.html の :root と同じ配色。global.css へは足さずここでローカル定数として持つ
@@ -35,6 +38,8 @@ const PREVIEW_COLUMN_WIDTH = CARD_WIDTH * 0.6;
 const TEXT_PADDING_X = 90;
 const TEXT_PADDING_X_COMPACT = 68;
 const TEXT_PADDING_Y = 80;
+
+const ICON_SIZE = 200;
 
 // preview 付きは左カラムの幅が半分以下になり、素のテキストサイズのままだと折り返しで
 // 末尾 1 文字だけが次行に落ちるなど読みにくくなるため、二段組のときだけ縮小する
@@ -71,24 +76,47 @@ function TextBlock({
   );
 }
 
-export function OgTemplate({ title, description, preview }: OgMeta) {
+export function OgTemplate({ title, description, preview, iconSrc }: OgMeta) {
   if (!preview) {
-    // preview の無いトップページは従来どおりテキストのみを中央に置く
+    // preview の無いトップページも左右の分割は preview 付きと揃える。アイコンは
+    // preview が入るのと同じ右カラムの中央に置く
     return (
       <div
         style={{
           width: CARD_WIDTH,
           height: CARD_HEIGHT,
           display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
+          flexDirection: 'row',
           backgroundColor: COLORS.background,
           color: COLORS.foreground,
           fontFamily: FONT_FAMILY,
-          padding: `${TEXT_PADDING_Y}px ${TEXT_PADDING_X}px`,
         }}
       >
-        <TextBlock title={title} description={description} compact={false} />
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            width: TEXT_COLUMN_WIDTH,
+            flexShrink: 0,
+            padding: `${TEXT_PADDING_Y}px 0 ${TEXT_PADDING_Y}px ${TEXT_PADDING_X}px`,
+          }}
+        >
+          <TextBlock title={title} description={description} compact={false} />
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            width: PREVIEW_COLUMN_WIDTH,
+            flexShrink: 0,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {iconSrc ? (
+            <img src={iconSrc} width={ICON_SIZE} height={ICON_SIZE} style={{ borderRadius: ICON_SIZE / 2 }} />
+          ) : null}
+        </div>
       </div>
     );
   }

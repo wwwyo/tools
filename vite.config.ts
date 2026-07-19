@@ -125,6 +125,14 @@ function toolListPlugin(): Plugin {
 // 定型文をツール側に書かせるのは避ける方針）ため、OGP 用にここへ直接持つ
 const SITE_DESCRIPTION = 'ペラいち PoC 置き場';
 
+// トップページのカードに添える GitHub アバター。favicon と同じ画像を使い回す。
+// satori はローカルパスも公開パスも読めないので data URL にして渡す
+const SITE_ICON_PATH = join(__dirname, 'src', 'public', 'apple-touch-icon.png');
+
+function siteIconDataUrl(): string {
+  return `data:image/png;base64,${readFileSync(SITE_ICON_PATH).toString('base64')}`;
+}
+
 type OgCard = { name: string; number?: string; title: string; description: string };
 
 // OGP を持つページの一覧。name はそのまま /og/<name>.png になる。
@@ -178,6 +186,15 @@ async function loadOgPreview(dir: string): Promise<ReactNode | undefined> {
   return createElement(mod.default);
 }
 
+// カード 1 枚を satori に渡す形にする。アイコンはトップページにだけ添える
+async function ogMetaFor(card: OgCard) {
+  return {
+    ...card,
+    preview: await loadOgPreview(card.name),
+    iconSrc: card.name === 'index' ? siteIconDataUrl() : undefined,
+  };
+}
+
 // ctx.path ("/usuppera/index.html" や "/index.html") を discoverOgCards() の name に対応させる
 function ogCardNameFromPath(path: string): string | null {
   if (path === '/index.html') return 'index';
@@ -210,19 +227,17 @@ function ogPlugin(): Plugin {
         if (!match) return next();
         const card = discoverOgCards().find((c) => c.name === match[1]);
         if (!card) return next();
-        const preview = await loadOgPreview(card.name);
         res.setHeader('Content-Type', 'image/png');
-        res.end(await renderOgPng({ ...card, preview }));
+        res.end(await renderOgPng(await ogMetaFor(card)));
       });
     },
     async generateBundle() {
       await Promise.all(
         discoverOgCards().map(async (card) => {
-          const preview = await loadOgPreview(card.name);
           this.emitFile({
             type: 'asset',
             fileName: `og/${card.name}.png`,
-            source: await renderOgPng({ ...card, preview }),
+            source: await renderOgPng(await ogMetaFor(card)),
           });
         }),
       );

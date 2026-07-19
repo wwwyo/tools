@@ -53,6 +53,8 @@ function App() {
                     title={card.title}
                     description={card.description}
                     preview={Preview ? <Preview /> : undefined}
+                    // 画像生成側は data URL を使うが、ブラウザ描画では公開パスで足りる
+                    iconSrc={card.name === 'index' ? '/apple-touch-icon.png' : undefined}
                   />
                 </div>
               </div>
