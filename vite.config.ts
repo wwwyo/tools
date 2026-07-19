@@ -123,7 +123,7 @@ function toolListPlugin(): Plugin {
 
 // トップページの説明文。src/index.html には description meta を書かせていない（自明な
 // 定型文をツール側に書かせるのは避ける方針）ため、OGP 用にここへ直接持つ
-const SITE_DESCRIPTION = 'ペラいち PoC 置き場';
+const SITE_DESCRIPTION = 'ペラいち Tools';
 
 // トップページのカードに添える GitHub アバター。favicon と同じ画像を使い回す。
 // satori はローカルパスも公開パスも読めないので data URL にして渡す
