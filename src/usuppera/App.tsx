@@ -96,7 +96,7 @@ export function App() {
           </div>
         </div>
         <textarea
-          className="relative block min-h-[240px] w-full resize-y border-0 bg-transparent px-4 py-0 text-base leading-[40px] text-transparent caret-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+          className="relative block min-h-[216px] w-full resize-y border-0 bg-transparent px-4 py-0 text-base leading-[36px] text-transparent caret-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={(e) => {
