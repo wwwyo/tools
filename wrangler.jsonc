@@ -5,7 +5,5 @@
   "assets": {
     "directory": "./dist"
   },
-  // vite.config.ts の SITE_URL と揃える。OGP は絶対 URL を埋め込むので、
-  // ここと SITE_URL が食い違うと og:image が 404 になる
   "routes": [{ "pattern": "tools.wwwyo.dev", "custom_domain": true }]
 }
