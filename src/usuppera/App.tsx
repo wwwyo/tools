@@ -87,13 +87,16 @@ export function App() {
         <div
           ref={backdropRef}
           aria-hidden="true"
-          className="lined-textarea pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 pt-3 pb-0 text-base text-ink"
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-0 text-base text-ink"
         >
-          {backdropNodes}
-          {"\n"}
+          {/* 罫線はスクロールする中身側に敷く。空のときも min-h-full で下端まで届く */}
+          <div className="lined-textarea min-h-full">
+            {backdropNodes}
+            {"\n"}
+          </div>
         </div>
         <textarea
-          className="relative block min-h-[222px] w-full resize-y border-0 bg-transparent px-4 pt-3 pb-0 text-base text-transparent caret-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-2"
+          className="relative block min-h-[210px] w-full resize-y border-0 bg-transparent px-4 py-0 text-base text-transparent caret-ink placeholder:text-muted focus-visible:outline-2 focus-visible:outline-red focus-visible:outline-offset-2"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={(e) => {

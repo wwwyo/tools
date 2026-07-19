@@ -16,8 +16,6 @@
       rgba(143, 168, 138, 0.28) 29px,
       rgba(143, 168, 138, 0.28) 30px
     );
-    background-origin: content-box;
-    background-attachment: local;
     line-height: 30px;
   }
 

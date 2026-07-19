@@ -47,6 +47,29 @@ function toolListNumber(index: number): string {
   return `No.${String(index + 1).padStart(3, '0')}`;
 }
 
+// 全エントリの <body> 直後に共通ヘッダーを差し込む
+function headerPlugin(): Plugin {
+  return {
+    name: 'header',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html, ctx) {
+        // dev で src/header.html を編集→リロードした結果を即反映させるためキャッシュしない
+        const header = readFileSync(join(__dirname, 'src', 'header.html'), 'utf-8');
+        // トップページのみ data-header-title の <a> を h1 化する。ツールページは各自の h1 と競合するため素のリンクのまま
+        const injected =
+          ctx.path === '/index.html'
+            ? header.replace(
+                /(<a[^>]*data-header-title[^>]*>.*?<\/a>)/s,
+                '<h1 class="m-0">$1</h1>',
+              )
+            : header;
+        return html.replace(/(<body[^>]*>)/, `$1\n${injected}`);
+      },
+    },
+  };
+}
+
 // src/index.html のツール一覧を <!-- TOOL_LIST --> プレースホルダに差し込む
 function toolListPlugin(): Plugin {
   return {
@@ -76,7 +99,7 @@ function toolListPlugin(): Plugin {
 export default defineConfig({
   root: 'src',
   server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
-  plugins: [toolListPlugin(), react(), tailwindcss()],
+  plugins: [headerPlugin(), toolListPlugin(), react(), tailwindcss()],
   build: {
     outDir: '../dist',
     emptyOutDir: true,

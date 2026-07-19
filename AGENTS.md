@@ -6,6 +6,7 @@
 
 - **1 ツール = 1 ディレクトリ**（`src/<appdir>/`、エントリは `index.html`）。ツールは vanilla JS でも React でも OK、ただし各ツールは独立していなければならない
 - **FORBIDDEN**: SPA 化、ツール間でのコンポーネント・ルーティング共有、クロスツール共有設計システム構築。ツールは常に独立
+- 例外: 共通ヘッダーは `src/header.html` に置き、`vite.config.ts` の `headerPlugin` がビルド時に全エントリの HTML へ注入する。ツール側のコードはこれを import しない（ツールの独立性は保たれる）。共有してよいのはビルド時注入されるサイト外殻（ヘッダー）と `global.css` のトークンのみで、ツールの中身は引き続き独立
 - 外部 CDN / API に依存しない。決定論的なロジックはすべてページ内 JS で完結させる
 - ツール一覧は各ツールの `index.html` の `<title>` / `<meta name="description">` からビルド時に自動生成される（Vite はビルド時に `src/<appdir>/index.html` を自動検出し、`src/index.html` の一覧を手で足す必要はない）
 - 完成度より出荷速度。動いたら build して deploy して post する
