@@ -58,3 +58,5 @@ bun run deploy   # Cloudflare へデプロイ（build → wrangler deploy）
 - Cloudflare Workers static assets（wrangler）
 - bun（パッケージ管理）
 - mise（ツール管理）
+
+- Vite 設定・ビルド時生成・TSX 動的読み込みの学びは `.agents/skills/coding/`（session-retro が維持）を参照
