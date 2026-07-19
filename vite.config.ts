@@ -75,6 +75,7 @@ function toolListPlugin(): Plugin {
 
 export default defineConfig({
   root: 'src',
+  server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
   plugins: [toolListPlugin(), react(), tailwindcss()],
   build: {
     outDir: '../dist',
