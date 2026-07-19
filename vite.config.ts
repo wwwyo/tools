@@ -109,8 +109,8 @@ function toolListPlugin(): Plugin {
             (tool, i) => `  <li class="border-b border-b-[rgba(31,27,22,0.16)]">
     <a class="group block px-1 py-[30px] text-inherit no-underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px]" href="/${tool.dir}/">
       <span class="mb-1.5 block font-mono text-xs tracking-[0.08em] text-primary">${toolListNumber(i)}</span>
-      <span class="font-serif text-xl font-bold text-foreground">${tool.title}</span>
-      <p class="mt-1.5 mb-0 text-sm text-muted-foreground">${tool.description}</p>
+      <span class="font-serif text-xl font-bold text-foreground">${escapeHtml(tool.title)}</span>
+      <p class="mt-1.5 mb-0 text-sm text-muted-foreground">${escapeHtml(tool.description)}</p>
     </a>
   </li>`,
           )
@@ -202,7 +202,7 @@ function ogCardNameFromPath(path: string): string | null {
   return m?.[1] ?? null;
 }
 
-function escapeAttr(value: string): string {
+function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
@@ -250,8 +250,8 @@ function ogPlugin(): Plugin {
         if (!card) return html;
         const url = card.name === 'index' ? SITE_URL : `${SITE_URL}/${card.name}/`;
         const tags = [
-          `<meta property="og:title" content="${escapeAttr(card.title)}">`,
-          `<meta property="og:description" content="${escapeAttr(card.description)}">`,
+          `<meta property="og:title" content="${escapeHtml(card.title)}">`,
+          `<meta property="og:description" content="${escapeHtml(card.description)}">`,
           `<meta property="og:type" content="website">`,
           `<meta property="og:url" content="${url}">`,
           `<meta property="og:image" content="${SITE_URL}/og/${card.name}.png">`,
