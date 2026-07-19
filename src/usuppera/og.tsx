@@ -81,7 +81,7 @@ export default function UsupperaOgPreview() {
           gap: 28,
         }}
       >
-        <span style={{ display: 'flex', fontSize: 30, color: '#7a7367' }}>ぺらっぺらです</span>
+        <span style={{ display: 'flex', fontSize: 42, color: '#7a7367' }}>ぺらっぺらです</span>
         <div
           style={{
             display: 'flex',
