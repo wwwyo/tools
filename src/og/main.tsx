@@ -50,7 +50,6 @@ function App() {
               >
                 <div style={{ transform: `scale(${SCALE})`, transformOrigin: 'top left' }}>
                   <OgTemplate
-                    number={card.number}
                     title={card.title}
                     description={card.description}
                     preview={Preview ? <Preview /> : undefined}

@@ -16,10 +16,10 @@ function TextLine({ segments }: { segments: string[] }) {
           key={`${segment}-${i}`}
           style={{
             display: 'flex',
-            fontSize: 15,
+            fontSize: 21,
             color: '#1f1b16',
             // 偶数インデックスが検知句。赤の下線バーで「波下線ハイライト」を代替する
-            borderBottom: i % 2 === 1 ? '3px solid #c73e2e' : 'none',
+            borderBottom: i % 2 === 1 ? '4px solid #c73e2e' : 'none',
           }}
         >
           {segment}
@@ -35,24 +35,20 @@ export default function UsupperaOgPreview() {
       style={{
         display: 'flex',
         flexDirection: 'column',
+        justifyContent: 'center',
         width: '100%',
         height: '100%',
         backgroundColor: '#fbfaf6',
-        padding: 28,
+        padding: '0 56px',
         position: 'relative',
       }}
     >
-      <span style={{ display: 'flex', fontSize: 26, fontWeight: 700, color: '#1f1b16' }}>
-        薄っぺらな戯
-      </span>
-
       {/* 罫線付きテキストエリア相当。行間に薄緑の罫線を敷く */}
       <div
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 16,
-          marginTop: 20,
+          gap: 28,
           width: '100%',
           padding: '4px 0',
         }}
@@ -65,7 +61,7 @@ export default function UsupperaOgPreview() {
               flexDirection: 'column',
               width: '100%',
               borderBottom: '1px solid rgba(143,168,138,0.5)',
-              paddingBottom: 10,
+              paddingBottom: 18,
             }}
           >
             <TextLine segments={segments} />
@@ -78,20 +74,20 @@ export default function UsupperaOgPreview() {
         style={{
           display: 'flex',
           position: 'absolute',
-          right: 28,
-          bottom: 28,
-          width: 92,
-          height: 92,
-          borderRadius: 46,
+          right: 48,
+          bottom: 48,
+          width: 130,
+          height: 130,
+          borderRadius: 65,
           // satori は `border: <width> double <color>` の一括指定を解釈しないため個別指定にする
           borderStyle: 'double',
-          borderWidth: 4,
+          borderWidth: 6,
           borderColor: '#c73e2e',
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        <span style={{ display: 'flex', fontSize: 40, fontWeight: 700, color: '#c73e2e' }}>
+        <span style={{ display: 'flex', fontSize: 56, fontWeight: 700, color: '#c73e2e' }}>
           D
         </span>
       </div>

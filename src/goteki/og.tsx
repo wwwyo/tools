@@ -1,55 +1,92 @@
 // OGP カード用の画面ミニチュア。satori (OGP) と通常の React 描画 (デモページ) の両方から
 // 使われるため inline style のみ・display は flex のみで組む（本体の main.ts は変更しない）。
-// 実装は Canvas から抽出した使用色を並べる UI だが、ここでは「それらしさ」だけを抜き出し、
-// サンプル画像の夕焼け（オレンジ/金/紺/黒）と色リストの帯を再現する
-const SAMPLE_COLORS = ['#ff8c69', '#ffd27a', '#1e3a5f', '#fff2b2', '#141414'];
+//
+// 本体 (src/goteki/main.ts の renderBlobs) は抽出色を SVG フィルタ (feTurbulence +
+// feDisplacementMap) で縁を滲ませた「白い紙に滲んだインク」として画面に散らす。satori は
+// SVG フィルタ・filter: blur()・backdrop-filter のいずれも解釈しないため、縁のぼけは
+// radial-gradient の色停止位置（中心はベタ、外側で急に透明へ抜ける）で近似する。
+// サンプル画像（夕焼け）から抽出した色を使う: #141414 / #ff8c69 / #ffd27a / #fff2b2 / #dfbb72
+type InkBlob = {
+  hex: string;
+  size: number;
+  top: string;
+  left: string;
+  opacity: number;
+  // 円のままだと人工的に見えるため、4 隅の半径をずらして不規則な染みの輪郭にする
+  borderRadius: string;
+};
+
+// 本体の滲みは紙にうっすら広がる淡さなので、opacity は低め・サイズは大きめに取り、
+// 縁は 30% 付近から抜き始めて広くぼかす。濃い #141414 を大きく置くと灰色の塊に見えて
+// インクにならないため、暖色を主役にして黒はごく小さく添えるだけにする
+const INK_BLOBS: InkBlob[] = [
+  { hex: '#ff8c69', size: 460, top: '6%', left: '6%', opacity: 0.42, borderRadius: '58% 42% 47% 53% / 41% 55% 45% 59%' },
+  { hex: '#ffd27a', size: 340, top: '-12%', left: '34%', opacity: 0.4, borderRadius: '60% 40% 55% 45% / 45% 60% 40% 55%' },
+  { hex: '#dfbb72', size: 300, top: '46%', left: '54%', opacity: 0.34, borderRadius: '46% 54% 40% 60% / 55% 46% 54% 45%' },
+  { hex: '#fff2b2', size: 420, top: '58%', left: '12%', opacity: 0.5, borderRadius: '44% 56% 50% 50% / 58% 44% 56% 42%' },
+  { hex: '#141414', size: 150, top: '20%', left: '74%', opacity: 0.16, borderRadius: '42% 58% 61% 39% / 46% 40% 60% 54%' },
+];
+
+const SAMPLE_COLORS = ['#141414', '#ff8c69', '#ffd27a', '#fff2b2', '#dfbb72'];
+
+function InkLayer() {
+  return (
+    <div style={{ display: 'flex', position: 'absolute', width: '100%', height: '100%' }}>
+      {INK_BLOBS.map((blob) => (
+        <div
+          key={`${blob.hex}-${blob.top}-${blob.left}`}
+          style={{
+            display: 'flex',
+            position: 'absolute',
+            top: blob.top,
+            left: blob.left,
+            width: blob.size,
+            height: blob.size,
+            opacity: blob.opacity,
+            borderRadius: blob.borderRadius,
+            backgroundImage: `radial-gradient(circle, ${blob.hex} 0%, ${blob.hex} 30%, ${blob.hex}00 72%)`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function GotekiOgPreview() {
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
+        position: 'relative',
         width: '100%',
         height: '100%',
-        backgroundColor: '#ffffff',
-        padding: 28,
+        // カード側と同じ紙色。白にするとテキスト側との境目に段差が出て、消したはずの
+        // 枠線と同じように見えてしまう
+        backgroundColor: '#fbfaf6',
+        overflow: 'hidden',
       }}
     >
-      <span style={{ display: 'flex', fontSize: 30, fontWeight: 700, color: '#1f1b16' }}>
-        五滴
-      </span>
-      <span style={{ display: 'flex', fontSize: 18, color: '#7a7367', marginTop: 6 }}>
-        使用色を五滴抽出
-      </span>
+      <InkLayer />
 
-      {/* サンプル画像プレビュー相当。夕焼け（空 2 段 + 海）を単純な帯で再現する */}
+      {/* 抽出結果らしさが伝わる要素として、使用色 top5 のスウォッチを右下にまとめて残す。
+          下敷きは敷かない（枠に見えるうえ、カード右端で見切れて汚くなる） */}
       <div
         style={{
           display: 'flex',
-          flexDirection: 'column',
-          marginTop: 20,
-          width: '100%',
-          height: 180,
-          borderRadius: 6,
-          overflow: 'hidden',
-          border: '2px solid rgba(140,133,123,0.35)',
+          flexDirection: 'row',
+          position: 'absolute',
+          right: 56,
+          bottom: 56,
+          gap: 16,
         }}
       >
-        <div style={{ display: 'flex', width: '100%', height: 72, backgroundColor: '#ff8c69' }} />
-        <div style={{ display: 'flex', width: '100%', height: 44, backgroundColor: '#ffd27a' }} />
-        <div style={{ display: 'flex', width: '100%', height: 64, backgroundColor: '#1e3a5f' }} />
-      </div>
-
-      {/* 使用色 top5 の色リスト相当。スウォッチだけ横に並べる */}
-      <div style={{ display: 'flex', flexDirection: 'row', gap: 12, marginTop: 24 }}>
         {SAMPLE_COLORS.map((hex) => (
           <div
             key={hex}
             style={{
               display: 'flex',
-              width: 56,
-              height: 56,
+              width: 48,
+              height: 48,
               borderRadius: 6,
               backgroundColor: hex,
               border: '2px solid rgba(140,133,123,0.35)',
