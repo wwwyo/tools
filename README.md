@@ -12,9 +12,15 @@ bun run build  # ビルド
 bun run deploy # Cloudflare へデプロイ
 ```
 
-## Tools
+## Structure
 
-- [薄っぺらな戯](src/usuppera/) — LLM っぽい定型句を検知して剥がす
+```
+src/
+├── index.html       ツール一覧（ビルド時に自動生成）
+├── global.css       Tailwind v4 エントリ
+└── <appdir>/        各ツール（1 ツール = 1 ディレクトリ）
+    └── index.html   エントリ
+```
 
 ## License
 
