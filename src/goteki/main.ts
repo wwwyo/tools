@@ -31,9 +31,8 @@ appEl.innerHTML = `
         class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded border border-dashed border-border px-4 py-10 text-center transition-colors focus-visible:outline-2 focus-visible:outline-ring"
       >
         <p class="text-sm text-foreground">
-          ここに画像をドラッグ&ドロップ / クリックで選択 / <kbd class="rounded border border-border bg-muted px-1 py-0.5 text-xs">Cmd+V</kbd> で貼り付け
+          ここに画像をドラッグ&ドロップ / クリックで選択
         </p>
-        <p class="text-xs text-muted-foreground">Canvas 上で解析するのみで、画像は外部に送信されません</p>
       </div>
       <div class="-mt-4 flex justify-end">
         <button

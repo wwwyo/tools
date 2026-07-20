@@ -78,7 +78,7 @@ export function App() {
         <div>
           <h1 className="m-0 mb-2 font-serif text-3xl font-bold tracking-[0.08em]">薄っぺらな戯</h1>
           <p className="m-0 text-sm text-muted-foreground">
-            記号の癖・定型句・文体の統計だけで、AI っぽさを決定論的に検知します。
+            記号の癖・定型句・文体の統計から、AI っぽさを採点します。
           </p>
         </div>
       </header>
@@ -199,10 +199,6 @@ export function App() {
           </>
         )}
       </div>
-
-      <footer className="mt-12 border-t border-border pt-4 text-xs text-muted-foreground">
-        決定論的なルールと統計のみで動作。テキストはどこにも送信されません。
-      </footer>
     </div>
   );
 }
