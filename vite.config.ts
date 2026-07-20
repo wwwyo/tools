@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { renderOgPng } from './src/og/render';
+import type { OgColors } from './src/og/template';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -173,10 +174,13 @@ function installOgJsxGlobals(): void {
   globals.__ogJsxFragment = Fragment;
 }
 
-// dev で og.tsx を編集 → リロードした結果を即反映させたいのでソースをキャッシュしない
-async function loadOgPreview(dir: string): Promise<ReactNode | undefined> {
+// dev で og.tsx を編集 → リロードした結果を即反映させたいのでソースをキャッシュしない。
+// og.tsx は default export の preview に加え、任意で `ogColors` を export できる
+async function loadOgModule(
+  dir: string,
+): Promise<{ preview?: ReactNode; colors?: Partial<OgColors> }> {
   const ogPath = join(__dirname, 'src', dir, 'og.tsx');
-  if (!existsSync(ogPath)) return undefined;
+  if (!existsSync(ogPath)) return {};
   const source = readFileSync(ogPath, 'utf-8');
   const { code } = await transformWithEsbuild(source, ogPath, {
     jsx: 'transform',
@@ -187,15 +191,18 @@ async function loadOgPreview(dir: string): Promise<ReactNode | undefined> {
   installOgJsxGlobals();
   const mod = (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)) as {
     default: ComponentType;
+    ogColors?: Partial<OgColors>;
   };
-  return createElement(mod.default);
+  return { preview: createElement(mod.default), colors: mod.ogColors };
 }
 
 // カード 1 枚を satori に渡す形にする。アイコンはトップページにだけ添える
 async function ogMetaFor(card: OgCard) {
+  const { preview, colors } = await loadOgModule(card.name);
   return {
     ...card,
-    preview: await loadOgPreview(card.name),
+    preview,
+    colors,
     iconSrc: card.name === 'index' ? siteIconDataUrl() : undefined,
   };
 }

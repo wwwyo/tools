@@ -2,6 +2,15 @@
 // 使われるため inline style のみ・display は flex のみで組む（本体の App.tsx は変更しない）。
 // 実物は罫線付き textarea に検知句を赤の波下線で表示するが、satori は
 // text-decoration-style: wavy を解釈しないため、検知句をベタ塗りの下線バーで代替する
+// カード左のテキスト側も styles.css と同じパレットに揃える。既定色のままだと
+// カード中央で背景色が切り替わって継ぎ目が出る
+export const ogColors = {
+  background: '#faf9fb',
+  foreground: '#07050b',
+  primary: '#dc5789',
+  mutedForeground: '#25223b',
+};
+
 const LINES = [
   ['本記事では、', '最新のAI活用', 'について解説します。'],
   ['業務効率化のために', 'AIを活用', 'する企業が増えています。'],

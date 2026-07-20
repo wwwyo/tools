@@ -4,6 +4,13 @@ import type { ReactNode } from 'react';
 // 同じコンポーネントを src/og/main.tsx（デモページ、通常の React 描画）からも使うため、
 // Tailwind class や CSS ファイルへの依存は禁止（AGENTS.md のツール独立性とも矛盾しないよう
 // この定数群は src/og/ 内に閉じ、global.css には手を入れない）。
+export type OgColors = {
+  background: string;
+  foreground: string;
+  primary: string;
+  mutedForeground: string;
+};
+
 export type OgMeta = {
   title: string;
   description: string;
@@ -13,15 +20,19 @@ export type OgMeta = {
   // トップページにだけ添えるアイコンの src。satori はローカルパスを読めないので
   // 画像生成側は data URL、ブラウザで描画するデモページは公開パスを渡す
   iconSrc?: string;
+  // og.tsx が `ogColors` を export しているツールだけ、カード外枠の配色を上書きする。
+  // ツール固有テーマの preview を敷いたとき、左のテキスト側だけ既定色のままだと
+  // カード中央に配色の継ぎ目が出るため
+  colors?: Partial<OgColors>;
 };
 
 // src/index.html の :root と同じ配色。global.css へは足さずここでローカル定数として持つ
-const COLORS = {
+const DEFAULT_COLORS: OgColors = {
   background: '#fbfaf6',
   foreground: '#1f1b16',
   primary: '#c73e2e',
   mutedForeground: '#7a7367',
-} as const;
+};
 
 const FONT_FAMILY = 'Sawarabi Gothic';
 
@@ -47,7 +58,8 @@ function TextBlock({
   title,
   description,
   compact,
-}: Omit<OgMeta, 'preview'> & { compact: boolean }) {
+  colors,
+}: Pick<OgMeta, 'title' | 'description'> & { compact: boolean; colors: OgColors }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Sawarabi Gothic は 400 しか持たず、satori はブラウザと違って合成太字を作らない。
@@ -57,7 +69,7 @@ function TextBlock({
           display: 'flex',
           fontSize: compact ? 56 : 72,
           lineHeight: 1.3,
-          color: COLORS.foreground,
+          color: colors.foreground,
         }}
       >
         {title}
@@ -66,7 +78,7 @@ function TextBlock({
         style={{
           display: 'flex',
           fontSize: compact ? 24 : 32,
-          color: COLORS.mutedForeground,
+          color: colors.mutedForeground,
           marginTop: 28,
         }}
       >
@@ -76,7 +88,8 @@ function TextBlock({
   );
 }
 
-export function OgTemplate({ title, description, preview, iconSrc }: OgMeta) {
+export function OgTemplate({ title, description, preview, iconSrc, colors: overrides }: OgMeta) {
+  const colors: OgColors = { ...DEFAULT_COLORS, ...overrides };
   if (!preview) {
     // preview の無いトップページも左右の分割は preview 付きと揃える。アイコンは
     // preview が入るのと同じ右カラムの中央に置く
@@ -87,8 +100,8 @@ export function OgTemplate({ title, description, preview, iconSrc }: OgMeta) {
           height: CARD_HEIGHT,
           display: 'flex',
           flexDirection: 'row',
-          backgroundColor: COLORS.background,
-          color: COLORS.foreground,
+          backgroundColor: colors.background,
+          color: colors.foreground,
           fontFamily: FONT_FAMILY,
         }}
       >
@@ -102,7 +115,7 @@ export function OgTemplate({ title, description, preview, iconSrc }: OgMeta) {
             padding: `${TEXT_PADDING_Y}px 0 ${TEXT_PADDING_Y}px ${TEXT_PADDING_X}px`,
           }}
         >
-          <TextBlock title={title} description={description} compact={false} />
+          <TextBlock title={title} description={description} compact={false} colors={colors} />
         </div>
         <div
           style={{
@@ -128,8 +141,8 @@ export function OgTemplate({ title, description, preview, iconSrc }: OgMeta) {
         height: CARD_HEIGHT,
         display: 'flex',
         flexDirection: 'row',
-        backgroundColor: COLORS.background,
-        color: COLORS.foreground,
+        backgroundColor: colors.background,
+        color: colors.foreground,
         fontFamily: FONT_FAMILY,
       }}
     >
@@ -143,7 +156,7 @@ export function OgTemplate({ title, description, preview, iconSrc }: OgMeta) {
           padding: `${TEXT_PADDING_Y}px 0 ${TEXT_PADDING_Y}px ${TEXT_PADDING_X_COMPACT}px`,
         }}
       >
-        <TextBlock title={title} description={description} compact />
+        <TextBlock title={title} description={description} compact colors={colors} />
       </div>
       {/* 右 60% を余白なく敷き詰める。preview 側の内容が枠より大きい場合だけ clip する */}
       <div
