@@ -263,6 +263,12 @@ const COARSE_DISPLACE_RATIO = 0.3;
 const FINE_DISPLACE_RATIO = 0.07;
 
 /**
+ * 面積比を直径へ落とすときの指数。物理的に忠実なのは 1/2（面積 ∝ ratio）だが、
+ * 実写画像では上位1色が支配的になりがちで下位の滴が視認できないほど潰れるため、圧縮している。
+ */
+const DIAMETER_RATIO_EXPONENT = 1 / 3;
+
+/**
  * 滴1つ分の、seed の異なる SVG filter を defs へ追加し、id を返す（1滴 = 1 filter）。
  * baseFrequency は軸別指定にして紙の繊維方向の異方性を出す（1段目=大きなうねり、2段目=縁の毛羽立ち）。
  *
@@ -315,7 +321,8 @@ function buildInkBackground(color: ColorResult): string {
 
 /**
  * 抽出色を背景レイヤーに「白い紙に滲んだインク」として散らす。
- * 各インクの面積は ratio に比例させ（直径 ∝ sqrt(ratio)）、1滴 = 子要素を持たない div 1個で表現する。
+ * 各インクの直径は ratio^DIAMETER_RATIO_EXPONENT（既定 1/3）に比例させ、
+ * 1滴 = 子要素を持たない div 1個で表現する。
  * 同じ色相の2層を multiply で重ねると重なり領域だけ濃くなり境界が輪として見えてしまうため、
  * 層を分けず、radial-gradient の stop 位置（--ink-front / --ink-core）を
  * Web Animations API で動かして「濡れ前線だけが紙の上を進む」ことを単一レイヤーで表現する。
@@ -333,17 +340,21 @@ function renderBlobs(colors: ColorResult[]): void {
   const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const maxRatio = Math.max(...colors.map((color) => color.ratio), 1);
-  const sumRatio = colors.reduce((sum, color) => sum + color.ratio, 0) || 1;
+  const sumRatioPow =
+    colors.reduce((sum, color) => sum + color.ratio ** (DIAMETER_RATIO_EXPONENT * 2), 0) || 1;
   // レイアウト前などで viewport が 0 と報告されるとインクが不可視になるためフォールバックする
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1280;
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
   const viewportArea = viewportWidth * viewportHeight;
-  // top5 の合計面積がビューポート面積の 40〜60% 程度になるスケール感を狙う
-  const targetAreaFraction = 0.4 + Math.random() * 0.2;
+  // 滴は画面外へのはみ出しとクリップで実効面積が落ちるうえ、濃く見えるのは半径 3〜4 割の
+  // コアだけなので、top5 の合計（幾何）面積はビューポート面積の 85〜115% 程度、
+  // つまり viewport を超える程度に取る
+  const targetAreaFraction = 0.85 + Math.random() * 0.3;
   const targetArea = viewportArea * targetAreaFraction;
-  // area_i = (pi/4) * scale^2 * ratio_i を合計が targetArea になるよう scale を逆算する
-  const scale = Math.sqrt((targetArea * 4) / (Math.PI * sumRatio));
-  const sizes = colors.map((color) => scale * Math.sqrt(color.ratio));
+  // area_i = (pi/4) * scale^2 * ratio_i^(2 * DIAMETER_RATIO_EXPONENT) を合計が
+  // targetArea になるよう scale を逆算する（面積は直径の2乗なので指数は2倍になる）
+  const scale = Math.sqrt((targetArea * 4) / (Math.PI * sumRatioPow));
+  const sizes = colors.map((color) => scale * color.ratio ** DIAMETER_RATIO_EXPONENT);
   const medianSize = median(sizes) || 1;
 
   const colWidth = 100 / colors.length;
