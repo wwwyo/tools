@@ -10,14 +10,13 @@ if (!appEl) {
 
 appEl.innerHTML = `
   <svg width="0" height="0" class="absolute" aria-hidden="true" focusable="false">
-    <filter id="ink-bleed" x="-50%" y="-50%" width="200%" height="200%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="4" seed="7" result="noise" />
-      <feDisplacementMap in="SourceGraphic" in2="noise" scale="120" />
-    </filter>
+    <!-- 滴ごとに feTurbulence の seed を変えるため、filter は renderBlobs() が動的生成して詰める。
+         SVG フィルタの既定は linearRGB で、通すと色が眠くなるため sRGB は各 filter 側で固定する -->
+    <defs id="ink-filter-defs"></defs>
   </svg>
 
   <div id="blob-layer" class="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true"></div>
-  <div class="pointer-events-none fixed inset-0 z-10 bg-white/60" aria-hidden="true"></div>
+  <div class="pointer-events-none fixed inset-0 z-10 bg-white/50" aria-hidden="true"></div>
 
   <main class="relative z-20 mx-auto flex max-w-xl flex-col px-5 py-10">
     <div class="flex flex-col gap-6">
@@ -80,6 +79,7 @@ appEl.innerHTML = `
 `;
 
 const blobLayerEl = document.getElementById("blob-layer") as HTMLDivElement;
+const inkFilterDefsEl = document.getElementById("ink-filter-defs") as unknown as SVGDefsElement;
 const dropzoneEl = document.getElementById("dropzone") as HTMLDivElement;
 const sampleButtonEl = document.getElementById("sample-button") as HTMLButtonElement;
 const fileInputEl = document.getElementById("file-input") as HTMLInputElement;
@@ -122,12 +122,6 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** 各コーナーが不揃いな border-radius を生成し、有機的なインクの輪郭を作る */
-function randomInkRadius(): string {
-  const corner = () => `${30 + Math.random() * 40}%`;
-  return `${corner()} ${corner()} ${corner()} ${corner()} / ${corner()} ${corner()} ${corner()} ${corner()}`;
-}
-
 /** Fisher-Yates で配列をシャッフルした新しい配列を返す */
 function shuffled<T>(items: T[]): T[] {
   const result = [...items];
@@ -140,15 +134,204 @@ function shuffled<T>(items: T[]): T[] {
   return result;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function randomBetween(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+/** 配列の中央値を返す */
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
+  }
+  return sorted[mid] as number;
+}
+
+/** 紙の繊維角に対する滴ごとの局所的なブレ幅（度） */
+const FIBER_ANGLE_JITTER_DEG = 7;
+
+/**
+ * Washburn 曲線（sqrt カーブ）を近似する keyframe オフセット。
+ * sqrt(p) が 0.2 刻みで等間隔になるよう選んでおり、曲率の大きい序盤ほどサンプルが密になる。
+ */
+const WASHBURN_SAMPLE_OFFSETS = [0.04, 0.16, 0.36, 0.64, 1] as const;
+
+/**
+ * Washburn 則 r^2 = r0^2 + Kt に沿って、進捗 progress（0〜1）における半径を返す。
+ * 毛細管浸透は距離が時間の平方根に比例するため、序盤は速く、後半は緩やかになる。
+ */
+function washburnRadius(progress: number, initialRadius: number, finalRadius: number): number {
+  return Math.sqrt(initialRadius ** 2 + (finalRadius ** 2 - initialRadius ** 2) * progress);
+}
+
+/** 濡れ前線（--ink-front）の初期半径（%）。着弾直後にごく小さく既に濡れている状態を表す */
+const FRONT_INITIAL_PERCENT_RANGE: readonly [number, number] = [9, 15];
+/** --ink-front の最終値。closest-side ellipse の縁いっぱいまで広がる */
+const FRONT_FINAL_PERCENT = 100;
+
+/** コア（--ink-core）の初期半径（%） */
+const CORE_INITIAL_PERCENT = 8;
+/** コアの最終半径（%）の範囲。前線よりずっと小さい位置で頭打ちになる */
+const CORE_FINAL_PERCENT_RANGE: readonly [number, number] = [32, 38];
+/**
+ * コアが実質的に拡大をやめる Washburn 進捗。この値で progress 軸を圧縮してから
+ * washburnRadius に渡すことで、washburnRadius 自体は変更せず
+ * 「序盤で速く立ち上がり、以降ほぼ横ばい」という前線とは異なる頭打ち挙動を作る。
+ */
+const CORE_SATURATION_PROGRESS = 0.3;
+
+/**
+ * 縁の alpha（--ink-edge-alpha）。着弾直後はやや高く、広がりきると同じ顔料がより広い面積を覆うため薄くなる。
+ * 薄くしすぎると濡れ前線の境界が消えて水彩・霧のようになるため、終端は 0.4 で止めている
+ */
+const EDGE_ALPHA_START = 0.62;
+const EDGE_ALPHA_END = 0.4;
+
+/** グラデーション中間 stop の alpha。前線・コアの進み方に関わらず固定（アニメーションしない） */
+const MID_STOP_ALPHA = 0.72;
+
+/** progress における --ink-core の目標値（%）。CORE_SATURATION_PROGRESS 以降は finalCorePercent で頭打ち */
+function coreRadiusAt(progress: number, finalCorePercent: number): number {
+  const saturatedProgress = Math.min(1, progress / CORE_SATURATION_PROGRESS);
+  return washburnRadius(saturatedProgress, CORE_INITIAL_PERCENT, finalCorePercent);
+}
+
+/**
+ * progress における --ink-edge-alpha の目標値。washburnRadius(progress, 0, 1) は sqrt(progress) と
+ * 等価な 0→1 の正規化カーブで、前線が広がるのと同じ速度で縁の alpha を減衰させるために流用する。
+ */
+function edgeAlphaAt(progress: number): number {
+  return EDGE_ALPHA_START + (EDGE_ALPHA_END - EDGE_ALPHA_START) * washburnRadius(progress, 0, 1);
+}
+
+/**
+ * 五滴の到着タイミングを burst 状に生成する（先頭は 0）。
+ * 70% の確率で 35〜150ms の短い間隔（連続着弾）、30% の確率で 280〜620ms の長い間隔を積み上げ、
+ * index * 160ms の等間隔で機械的に見えていた着弾リズムを崩す。
+ */
+function generateBurstDelays(count: number): number[] {
+  const delays = [0];
+  for (let i = 1; i < count; i++) {
+    const gap = Math.random() < 0.7 ? randomBetween(35, 150) : randomBetween(280, 620);
+    delays.push((delays[i - 1] as number) + gap);
+  }
+  return delays;
+}
+
+/**
+ * 単一要素の --ink-front / --ink-core / --ink-edge-alpha / opacity を Washburn 曲線の
+ * サンプル点から1本の keyframes にまとめて生成する。4つを animate() で分けず1本にまとめるのは、
+ * 同一要素上に複数の Animation が並走してタイミングがずれたり再計算が増えたりするのを避けるため。
+ * offset 0〜0.04 は物理時間そのものではなく、着弾の立ち上がりを知覚的に圧縮した演出。
+ * TypeScript の Keyframe 型はインデックスシグネチャ `[property: string]: string | number | ...`
+ * を持つため、`"--ink-front"` のようなカスタムプロパティキーもそのまま型が通る。
+ */
+function buildInkKeyframes(
+  initialFrontPercent: number,
+  finalCorePercent: number,
+  opacity: number,
+): Keyframe[] {
+  const keyframes: Keyframe[] = [
+    {
+      offset: 0,
+      opacity: 0,
+      "--ink-front": `${initialFrontPercent}%`,
+      "--ink-core": `${CORE_INITIAL_PERCENT}%`,
+      "--ink-edge-alpha": String(EDGE_ALPHA_START),
+    },
+  ];
+  for (const p of WASHBURN_SAMPLE_OFFSETS) {
+    keyframes.push({
+      offset: p,
+      opacity,
+      "--ink-front": `${washburnRadius(p, initialFrontPercent, FRONT_FINAL_PERCENT)}%`,
+      "--ink-core": `${coreRadiusAt(p, finalCorePercent)}%`,
+      "--ink-edge-alpha": String(edgeAlphaAt(p)),
+    });
+  }
+  return keyframes;
+}
+
+let inkFilterIdCounter = 0;
+
+/** 層の直径に対する displacement 量の比。合計 (COARSE + FINE) / 2 が縁の最大変位率になる */
+const COARSE_DISPLACE_RATIO = 0.3;
+const FINE_DISPLACE_RATIO = 0.07;
+
+/**
+ * 滴1つ分の、seed の異なる SVG filter を defs へ追加し、id を返す（1滴 = 1 filter）。
+ * baseFrequency は軸別指定にして紙の繊維方向の異方性を出す（1段目=大きなうねり、2段目=縁の毛羽立ち）。
+ *
+ * displacement の scale は px 固定にせず要素の直径 layerSize に比例させる。固定値だと、
+ * 小さい滴では変位が直径に対して過大になって形が崩れ、大きい滴ではほとんど滲まないため。
+ * filter 領域の余白は各辺 25% で、最大変位率 (0.3 + 0.07) / 2 = 18.5% を上回るので縁が矩形に切れない。
+ * color-interpolation-filters を外すと色が眠くなるため必ず sRGB を指定する。
+ */
+function appendInkFilter(defsEl: SVGDefsElement, layerSize: number): string {
+  const id = `ink-bleed-${inkFilterIdCounter++}`;
+  const coarseSeed = Math.floor(Math.random() * 1000);
+  const fineSeed = Math.floor(Math.random() * 1000);
+  const coarseScale = layerSize * COARSE_DISPLACE_RATIO;
+  const fineScale = layerSize * FINE_DISPLACE_RATIO;
+  defsEl.insertAdjacentHTML(
+    "beforeend",
+    `<filter id="${id}" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.010 0.026" numOctaves="3" seed="${coarseSeed}" result="coarse" />
+      <feDisplacementMap in="SourceGraphic" in2="coarse" scale="${coarseScale.toFixed(1)}" result="warped" />
+      <feTurbulence type="fractalNoise" baseFrequency="0.038 0.065" numOctaves="2" seed="${fineSeed}" result="fine" />
+      <feDisplacementMap in="warped" in2="fine" scale="${fineScale.toFixed(1)}" />
+    </filter>`,
+  );
+  return id;
+}
+
+/**
+ * 1滴分の radial-gradient を組み立てる。closest-side ellipse なので要素の width/height の比率が
+ * そのまま楕円の異方性になる（transform scale は使わない）。
+ * 中心のコア（--ink-core）と外側の前線（--ink-front）を別々の stop 位置として動かす。
+ * 全 stop を --ink-front に比例させるとコアも一緒に拡大してしまい、
+ * 濃度分布が丸ごと拡大する自己相似ズーム（2層構成が輪に見えていた問題の根） に戻ってしまうため、
+ * コアの stop だけ --ink-core を参照させて別々に頭打ちさせる。
+ * 中間 stop の alpha は固定値、縁側の alpha だけ --ink-edge-alpha で
+ * 「広がるほど同じ顔料がより広い面積を覆って薄くなる」変化をつける。
+ */
+function buildInkBackground(color: ColorResult): string {
+  const rgb = `${color.r} ${color.g} ${color.b}`;
+  return (
+    `radial-gradient(closest-side ellipse, ` +
+    `rgb(${rgb} / 1) 0%, ` +
+    `rgb(${rgb} / 1) var(--ink-core), ` +
+    `rgb(${rgb} / ${MID_STOP_ALPHA}) calc((var(--ink-core) + var(--ink-front)) / 2), ` +
+    // 最後の有色 stop を前線の直近（94%）まで寄せ、透明までを短い帯で落として濡れ前線の境界を立てる。
+    // ここを緩めると縁が延々と薄れて水彩のようになる
+    `rgb(${rgb} / var(--ink-edge-alpha)) calc(var(--ink-front) * 0.94), ` +
+    `transparent var(--ink-front))`
+  );
+}
+
 /**
  * 抽出色を背景レイヤーに「白い紙に滲んだインク」として散らす。
- * 各インクの面積は ratio に比例させ（直径 ∝ sqrt(ratio)）、
- * SVG フィルタ（feTurbulence + feDisplacementMap）で縁を不規則に滲ませる。
+ * 各インクの面積は ratio に比例させ（直径 ∝ sqrt(ratio)）、1滴 = 子要素を持たない div 1個で表現する。
+ * 同じ色相の2層を multiply で重ねると重なり領域だけ濃くなり境界が輪として見えてしまうため、
+ * 層を分けず、radial-gradient の stop 位置（--ink-front / --ink-core）を
+ * Web Animations API で動かして「濡れ前線だけが紙の上を進む」ことを単一レイヤーで表現する。
+ * 要素サイズは最初から最終サイズ（異方性込み）で固定し、transform による scale 拡大は行わない
+ * （scale 拡大だと SVG フィルタのノイズも一緒に伸び縮みし、紙目が滴と一緒に伸びる不自然さが出るため）。
+ * 個体差は無相関な乱数ではなく、五滴で共有する紙の繊維角 paperFiberAngle を軸に、
+ * 滴ごとの局所角度・異方性・duration・到着タイミングを相関させて生成する。
  * 位置は層化ランダム（色数分の縦スライスに分割し、シャッフルした列に1色ずつ割り当てる）で決め、
  * 少数色でも横方向に偏らず全体へ分散させる。
  */
 function renderBlobs(colors: ColorResult[]): void {
   blobLayerEl.innerHTML = "";
+  inkFilterDefsEl.innerHTML = "";
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const maxRatio = Math.max(...colors.map((color) => color.ratio), 1);
   const sumRatio = colors.reduce((sum, color) => sum + color.ratio, 0) || 1;
@@ -156,41 +339,77 @@ function renderBlobs(colors: ColorResult[]): void {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1280;
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
   const viewportArea = viewportWidth * viewportHeight;
-  // top5 の合計面積がビューポート面積の 25〜35% 程度になるスケール感を狙う
-  const targetAreaFraction = 0.25 + Math.random() * 0.1;
+  // top5 の合計面積がビューポート面積の 40〜60% 程度になるスケール感を狙う
+  const targetAreaFraction = 0.4 + Math.random() * 0.2;
   const targetArea = viewportArea * targetAreaFraction;
   // area_i = (pi/4) * scale^2 * ratio_i を合計が targetArea になるよう scale を逆算する
   const scale = Math.sqrt((targetArea * 4) / (Math.PI * sumRatio));
+  const sizes = colors.map((color) => scale * Math.sqrt(color.ratio));
+  const medianSize = median(sizes) || 1;
 
   const colWidth = 100 / colors.length;
   const columnOrder = shuffled(colors.map((_, index) => index));
+  const delayOrder = shuffled(generateBurstDelays(colors.length));
+  // 紙の繊維方向は五滴で共有する1本の軸として決め、滴ごとにその周りで少しだけブレさせる
+  const paperFiberAngle = randomBetween(-18, 18);
 
   colors.forEach((color, index) => {
-    const inkEl = document.createElement("div");
-    const size = scale * Math.sqrt(color.ratio);
+    const size = sizes[index] as number;
     const opacity = 0.5 + (color.ratio / maxRatio) * 0.3;
     const column = columnOrder[index] as number;
     const left = column * colWidth + Math.random() * colWidth;
     const top = Math.random() * 100;
+    const localFiberAngle =
+      paperFiberAngle + randomBetween(-FIBER_ANGLE_JITTER_DEG, FIBER_ANGLE_JITTER_DEG);
+    // 面積をほぼ保存した楕円化（finalX * finalY ≈ 1）で、紙目方向にだけ伸びる異方性を作る。
+    // closest-side ellipse は要素の boundingbox に合わせた楕円になるため、
+    // width/height をこの比率で最終サイズに固定するだけで異方性が出る（transform scale は使わない）
+    const anisotropy = randomBetween(0.05, 0.18);
+    const finalScaleX = 1 + anisotropy;
+    const finalScaleY = 1 / finalScaleX;
+    const width = size * finalScaleX;
+    const height = size * finalScaleY;
+    const initialFrontPercent = randomBetween(...FRONT_INITIAL_PERCENT_RANGE);
+    const finalCorePercent = randomBetween(...CORE_FINAL_PERCENT_RANGE);
+    // 支配色（大滴）だけが極端に遅くならないよう、物理的な指数2を1.25へ圧縮している
+    const duration = clamp(
+      (3200 * (size / medianSize) ** 1.25) / randomBetween(0.82, 1.2),
+      1800,
+      5600,
+    );
+    const delay = delayOrder[index] as number;
 
-    inkEl.className = "absolute opacity-0 mix-blend-multiply transition-all duration-700 ease-out";
-    inkEl.style.width = `${size}px`;
-    inkEl.style.height = `${size}px`;
+    const inkEl = document.createElement("div");
+    inkEl.className = "absolute mix-blend-multiply";
+    inkEl.style.width = `${width}px`;
+    inkEl.style.height = `${height}px`;
     inkEl.style.left = `${left}%`;
     inkEl.style.top = `${top}%`;
-    inkEl.style.borderRadius = randomInkRadius();
-    inkEl.style.transform = "translate(-50%, -50%) scale(0.6)";
-    inkEl.style.background = `radial-gradient(circle, ${color.hex} 0%, ${color.hex} 60%, ${color.hex}00 75%)`;
-    // 柔らかさは全面ガラスの backdrop-blur に任せ、ここでは縁の滲み（displacement）だけかける
-    inkEl.style.filter = "url(#ink-bleed)";
+    // 位置決めと繊維角の回転のみ transform で担う（拡大は --ink-front / --ink-core 側で行う）
+    inkEl.style.transform = `translate(-50%, -50%) rotate(${localFiberAngle}deg)`;
+    inkEl.style.background = buildInkBackground(color);
+    // 異方性で width と height が異なるため、大きい方の辺を渡す。
+    // 想定するアニソトロピー幅（anisotropy 0.05〜0.18）では、小さい方の辺の余白 25% を
+    // 実用上下回らない（最悪ケースでも数%の超過に収まり縁は既にほぼ透明なため視認できない）。
+    // 逆に小さい方の辺を渡すと大きい辺側の変位が過小になり滲みが弱く見える
+    const filterLayerSize = Math.max(width, height);
+    inkEl.style.filter = `url(#${appendInkFilter(inkFilterDefsEl, filterLayerSize)})`;
+
+    if (prefersReducedMotion) {
+      // WAAPI を使わず、アニメーション完了後（offset 1）相当の状態を直接適用する
+      inkEl.style.opacity = String(opacity);
+      inkEl.style.setProperty("--ink-front", `${FRONT_FINAL_PERCENT}%`);
+      inkEl.style.setProperty("--ink-core", `${finalCorePercent}%`);
+      inkEl.style.setProperty("--ink-edge-alpha", String(EDGE_ALPHA_END));
+    } else {
+      inkEl.animate(buildInkKeyframes(initialFrontPercent, finalCorePercent, opacity), {
+        duration,
+        delay,
+        fill: "both",
+      });
+    }
 
     blobLayerEl.append(inkEl);
-
-    // 追加直後は opacity-0 / scale(0.6) のまま描画させ、次フレームで目標値へ遷移させてインクが広がる感を出す
-    requestAnimationFrame(() => {
-      inkEl.style.opacity = String(opacity);
-      inkEl.style.transform = "translate(-50%, -50%) scale(1)";
-    });
   });
 }
 

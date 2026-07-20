@@ -7,3 +7,35 @@
   --muted-foreground: #7a7367;
   --border: rgba(140, 133, 123, 0.35);
 }
+
+/*
+ * インクの滲みは Washburn 則（毛細管浸透: r^2 = r0^2 + Kt）に沿った非線形の速度プロファイルを
+ * 滴ごとに個別計算する必要があり、CSS の @keyframes / cubic-bezier では表現できないため
+ * Web Animations API（main.ts の renderBlobs / buildInkKeyframes 等）で生成する。
+ * prefers-reduced-motion: reduce の分岐も main.ts 側の matchMedia で行い、
+ * アニメーションを省いて最終状態を直接スタイルに適用する。
+ */
+
+/*
+ * 1滴 = 単一 div の radial-gradient stop 位置をこの3つのカスタムプロパティで動かし、
+ * 「濡れ前線だけが紙の上を進む」ことを表現する（transform による scale 拡大は行わない）。
+ * @property で型付き登録しないとカスタムプロパティは離散値として扱われ、
+ * Web Animations API / CSS 遷移のどちらでも補間されない。
+ */
+@property --ink-front {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+@property --ink-core {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+@property --ink-edge-alpha {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
