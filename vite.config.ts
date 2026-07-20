@@ -12,6 +12,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // og:image / og:url は絶対 URL でないとクローラが解決できないため、相対パスにはできない
 const SITE_URL = 'https://tools.wwwyo.dev';
 
+// ヘッダーの GitHub リンクの起点。ツールページでは配下の src/<appdir> へ差し替える
+const REPO_URL = 'https://github.com/wwwyo/tools';
+
 // src/og/ は OGP のデモページで、ツールではない（一覧にも出さないし OGP 自体も生成しない）
 const NON_TOOL_DIRS = new Set(['og']);
 
@@ -65,13 +68,15 @@ function headerPlugin(): Plugin {
         // dev で src/header.html を編集→リロードした結果を即反映させるためキャッシュしない
         const header = readFileSync(join(__dirname, 'src', 'header.html'), 'utf-8');
         // トップページのみ data-header-title の <a> を h1 化する。ツールページは各自の h1 と競合するため素のリンクのまま
-        const injected =
-          ctx.path === '/index.html'
-            ? header.replace(
-                /(<a[^>]*data-header-title[^>]*>.*?<\/a>)/s,
-                '<h1 class="m-0">$1</h1>',
-              )
-            : header;
+        // dev は `/goteki/`、build は `/goteki/index.html` で来るので両方から appdir を取る
+        const appdir = ctx.path.replace(/\/index\.html$/, '').replace(/^\/|\/$/g, '');
+        const withTitle = appdir
+          ? header
+          : header.replace(/(<a[^>]*data-header-title[^>]*>.*?<\/a>)/s, '<h1 class="m-0">$1</h1>');
+        // 開いているツールの source を直接開かせる。トップは repo root
+        const injected = appdir
+          ? withTitle.replace(REPO_URL, `${REPO_URL}/tree/main/src/${appdir}`)
+          : withTitle;
         return html.replace(/(<body[^>]*>)/, `$1\n${injected}`);
       },
     },
