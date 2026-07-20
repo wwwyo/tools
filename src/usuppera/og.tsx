@@ -17,9 +17,9 @@ function TextLine({ segments }: { segments: string[] }) {
           style={{
             display: 'flex',
             fontSize: 21,
-            color: '#1f1b16',
-            // 偶数インデックスが検知句。赤の下線バーで「波下線ハイライト」を代替する
-            borderBottom: i % 2 === 1 ? '4px solid #c73e2e' : 'none',
+            color: '#07050b',
+            // 偶数インデックスが検知句。primary の下線バーで「波下線ハイライト」を代替する
+            borderBottom: i % 2 === 1 ? '4px solid #dc5789' : 'none',
           }}
         >
           {segment}
@@ -38,12 +38,12 @@ export default function UsupperaOgPreview() {
         justifyContent: 'center',
         width: '100%',
         height: '100%',
-        backgroundColor: '#fbfaf6',
+        backgroundColor: '#faf9fb',
         padding: '0 56px',
         position: 'relative',
       }}
     >
-      {/* 罫線付きテキストエリア相当。行間に薄緑の罫線を敷く */}
+      {/* 罫線付きテキストエリア相当。行間に薄いラベンダーの罫線を敷く */}
       <div
         style={{
           display: 'flex',
@@ -60,7 +60,7 @@ export default function UsupperaOgPreview() {
               display: 'flex',
               flexDirection: 'column',
               width: '100%',
-              borderBottom: '1px solid rgba(143,168,138,0.5)',
+              borderBottom: '1px solid rgba(158,154,183,0.5)',
               paddingBottom: 18,
             }}
           >
@@ -69,7 +69,7 @@ export default function UsupperaOgPreview() {
         ))}
       </div>
 
-      {/* ランクスタンプ相当。右下に赤の二重丸でランク文字を置き、その左に判定コメントを添える */}
+      {/* ランクスタンプ相当。右下に primary の二重丸でランク文字を置き、その左に判定コメントを添える */}
       <div
         style={{
           display: 'flex',
@@ -81,7 +81,7 @@ export default function UsupperaOgPreview() {
           gap: 48,
         }}
       >
-        <span style={{ display: 'flex', fontSize: 52, color: '#7a7367' }}>ぺらっぺらです</span>
+        <span style={{ display: 'flex', fontSize: 52, color: '#25223b' }}>ペラッペラです</span>
         <div
           style={{
             display: 'flex',
@@ -91,12 +91,12 @@ export default function UsupperaOgPreview() {
             // satori は `border: <width> double <color>` の一括指定を解釈しないため個別指定にする
             borderStyle: 'double',
             borderWidth: 6,
-            borderColor: '#c73e2e',
+            borderColor: '#dc5789',
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          <span style={{ display: 'flex', fontSize: 56, color: '#c73e2e' }}>D</span>
+          <span style={{ display: 'flex', fontSize: 56, color: '#dc5789' }}>E</span>
         </div>
       </div>
     </div>
