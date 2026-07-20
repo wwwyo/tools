@@ -15,17 +15,17 @@ const fontsDir = join(
   '..',
   'node_modules',
   '@fontsource',
-  'sawarabi-mincho',
+  'sawarabi-gothic',
   'files',
 );
 // japanese サブセットはラテン文字も持つので 1 本で足りる。latin サブセットを同じ family 名で
 // 足しても satori は同名 (family/weight/style) を 1 本に畳んで一方しか使わないため意味がない
-const japaneseFont = readFileSync(join(fontsDir, 'sawarabi-mincho-japanese-400-normal.woff'));
+const japaneseFont = readFileSync(join(fontsDir, 'sawarabi-gothic-japanese-400-normal.woff'));
 
 // このサブセットが欠く漢字は tofu (□) になる。フォールバックフォントは積んでいないので、
 // ツールの title / description はこのフォントが持つ字の範囲で書く
 const fonts = [
-  { name: 'Sawarabi Mincho', data: japaneseFont, weight: 400 as const, style: 'normal' as const },
+  { name: 'Sawarabi Gothic', data: japaneseFont, weight: 400 as const, style: 'normal' as const },
 ];
 
 export async function renderOgPng(meta: OgMeta): Promise<Buffer> {

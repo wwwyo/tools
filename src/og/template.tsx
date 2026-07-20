@@ -23,7 +23,7 @@ const COLORS = {
   mutedForeground: '#7a7367',
 } as const;
 
-const FONT_FAMILY = 'Sawarabi Mincho';
+const FONT_FAMILY = 'Sawarabi Gothic';
 
 const CARD_WIDTH = 1200;
 const CARD_HEIGHT = 630;
@@ -50,7 +50,7 @@ function TextBlock({
 }: Omit<OgMeta, 'preview'> & { compact: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {/* Sawarabi Mincho は 400 しか持たず、satori はブラウザと違って合成太字を作らない。
+      {/* Sawarabi Gothic は 400 しか持たず、satori はブラウザと違って合成太字を作らない。
           fontWeight を指定しても効かないので書かない */}
       <span
         style={{
