@@ -78,7 +78,7 @@ export function App() {
         <div>
           <h1 className="m-0 mb-2 font-serif text-3xl font-bold tracking-[0.08em]">薄っぺらな戯</h1>
           <p className="m-0 text-sm text-muted-foreground">
-            LLM が日本語で使いがちな、もっともらしい定型句を辞書だけで検知します。
+            記号の癖・定型句・文体の統計だけで、AI っぽさを決定論的に検知します。
           </p>
         </div>
       </header>
@@ -151,6 +151,35 @@ export function App() {
               </div>
             )}
 
+            {result.statSignals.length > 0 && (
+              <>
+                <h2 className="mt-0 mb-2.5 font-serif text-base tracking-[0.05em]">文体の癖</h2>
+                <ul className="m-0 mb-6 list-none p-0">
+                  {result.statSignals.map((signal) => (
+                    <li
+                      key={signal.key}
+                      className="flex justify-between border-t border-border py-1 text-sm first:border-t-0"
+                    >
+                      <span>
+                        {signal.label}
+                        <span className="ml-2 text-xs text-muted-foreground">{signal.detail}</span>
+                      </span>
+                      <span className="font-mono text-muted-foreground">-{signal.penalty}</span>
+                    </li>
+                  ))}
+                  {/* 上限で丸められると各行の素点合計と実減点がずれるため、合計行で実値を示す */}
+                  {result.statSignals.reduce((sum, s) => sum + s.penalty, 0) > result.statPenalty && (
+                    <li className="flex justify-between border-t border-border py-1 text-sm">
+                      <span className="text-xs text-muted-foreground">
+                        減点合計（上限 {result.statPenalty} を適用）
+                      </span>
+                      <span className="font-mono text-muted-foreground">-{result.statPenalty}</span>
+                    </li>
+                  )}
+                </ul>
+              </>
+            )}
+
             <h2 className="mt-0 mb-2.5 font-serif text-base tracking-[0.05em]">ぺらっぺらな表現</h2>
             {detectedItems.length > 0 ? (
               <ul className="m-0 list-none p-0">
@@ -172,7 +201,7 @@ export function App() {
       </div>
 
       <footer className="mt-12 border-t border-border pt-4 text-xs text-muted-foreground">
-        決定論的な辞書マッチのみで動作。テキストはどこにも送信されません。
+        決定論的なルールと統計のみで動作。テキストはどこにも送信されません。
       </footer>
     </div>
   );
