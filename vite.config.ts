@@ -2,6 +2,7 @@ import { defineConfig, transformWithEsbuild, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { createElement, Fragment, type ComponentType, type ReactNode } from 'react';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -59,6 +60,16 @@ function toolListNumber(index: number): string {
   return `No.${String(index + 1).padStart(3, '0')}`;
 }
 
+// 掲載日は index.html の初回コミット日。未コミットのツールは日付なしで返す
+// （今日の日付にフォールバックすると commit 前後で表示が変わってしまう）
+function toolPublishedAt(dir: string): string | undefined {
+  const out = execSync(`git log --diff-filter=A --format=%as -- src/${dir}/index.html`, {
+    cwd: __dirname,
+    encoding: 'utf-8',
+  }).trim();
+  return out.split('\n').at(-1) || undefined;
+}
+
 // 全エントリの <body> 直後に共通ヘッダーを差し込む
 function headerPlugin(): Plugin {
   return {
@@ -109,14 +120,29 @@ function toolListPlugin(): Plugin {
       order: 'pre',
       handler(html, ctx) {
         if (ctx.path !== '/index.html') return html;
-        const tools = discoverTools();
+        // 並び替えはトップページの表示だけ。discoverOgCards() の番号はアルファベット順のまま
+        // にして、既存 OG 画像の No. がずれないようにする
+        const tools = discoverTools()
+          .map((tool) => ({ ...tool, publishedAt: toolPublishedAt(tool.dir) }))
+          .sort((a, b) => {
+            if (a.publishedAt !== b.publishedAt) {
+              if (!a.publishedAt) return 1;
+              if (!b.publishedAt) return -1;
+              return b.publishedAt.localeCompare(a.publishedAt);
+            }
+            return a.dir.localeCompare(b.dir);
+          });
         const items = tools
           .map(
-            (tool, i) => `  <li class="border-b border-b-[rgba(31,27,22,0.16)]">
-    <a class="group block px-1 py-[30px] text-inherit no-underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px]" href="/${tool.dir}/">
-      <span class="mb-1.5 block font-mono text-xs tracking-[0.08em] text-primary">${toolListNumber(i)}</span>
-      <span class="font-serif text-xl font-bold text-foreground">${escapeHtml(tool.title)}</span>
-      <p class="mt-1.5 mb-0 text-sm text-muted-foreground">${escapeHtml(tool.description)}</p>
+            (tool) => `  <li>
+    <a class="group block text-inherit no-underline focus-visible:rounded-[2px] focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-4" href="/${tool.dir}/">
+      <img class="mb-3 w-full rounded-sm border border-[rgba(31,27,22,0.16)]" src="/og/${tool.dir}.png" width="1200" height="630" loading="lazy" alt="">${
+        tool.publishedAt
+          ? `\n      <time class="mb-1.5 block font-mono text-xs tracking-[0.08em] text-primary" datetime="${tool.publishedAt}">${tool.publishedAt}</time>`
+          : ''
+      }
+      <span class="font-serif text-lg font-bold text-foreground">${escapeHtml(tool.title)}</span>
+      <p class="mt-1 mb-0 text-sm text-muted-foreground">${escapeHtml(tool.description)}</p>
     </a>
   </li>`,
           )
