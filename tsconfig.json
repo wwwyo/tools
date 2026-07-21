@@ -15,7 +15,8 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "types": ["node", "react", "react-dom", "@webgpu/types"]
   },
   "include": ["src", "vite.config.ts"]
 }

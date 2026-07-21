@@ -1,0 +1,47 @@
+/*
+ * HDR の輝きを比較するツールなので、明るい要素が沈まないよう画面全体を暗系にする
+ * shadcn の標準 dark テーマ値をそのまま :root に流用（独自カラートークンは足していない）
+ */
+:root {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  color-scheme: dark;
+}
+
+/*
+ * dynamic-range-limit は Tailwind に対応ユーティリティが無い実験的 CSS プロパティなので、
+ * ここだけ生 CSS で書く。standard/no-limit の切り替えは元デモの挙動をそのまま踏襲する。
+ */
+@layer components {
+  .drl-hover {
+    dynamic-range-limit: standard;
+    transition: dynamic-range-limit 0.6s;
+  }
+
+  .drl-hover:hover,
+  .drl-hover:focus-visible {
+    dynamic-range-limit: no-limit;
+    /* mix() 対応ブラウザではこちらが上書きして勝つ。80% ではなく元デモの 70/30 比率を維持 */
+    dynamic-range-limit: dynamic-range-limit-mix(standard 70%, no-limit 30%);
+  }
+
+  .drl-no-limit {
+    dynamic-range-limit: no-limit;
+  }
+}

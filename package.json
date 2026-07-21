@@ -15,6 +15,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",
+    "@webgpu/types": "0.1.71",
     "satori": "0.26.0",
     "tailwindcss": "4.3.2",
     "typescript": "7.0.2",
