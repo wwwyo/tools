@@ -104,8 +104,23 @@ export function encodePqPixels(imageData: ImageData, params: GainMapParams): Ima
   return new ImageData(out, width, height);
 }
 
-/** PQ JPEG のベース品質（UltraHDR のベースと同じ経験値をそのまま流用） */
-const PQ_JPEG_QUALITY = 0.95;
+/**
+ * PQ JPEG の品質候補（高い順に試す）。
+ * X は「4096px 以下・5MB 未満・EXIF 回転なし・ファイルサイズ(byte) < 幅×高さ」を
+ * すべて満たす JPEG だけを再エンコードせず ICC ごと保持する。1つでも破ると
+ * quality 85 / 4:2:0 で再圧縮され、HDR 表示が壊れる可能性があるため、
+ * 条件を満たすまで品質を段階的に下げる。
+ */
+const PQ_JPEG_QUALITY_CANDIDATES = [0.95, 0.9, 0.85, 0.8, 0.75, 0.7] as const;
+
+/** X の再エンコード回避条件に対する安全マージン（境界ぴったりを避ける） */
+const X_BYTE_LIMIT_RATIO = 0.95;
+const X_MAX_FILE_BYTES = 5 * 1024 * 1024 * 0.95;
+
+/** X が JPEG を再エンコードせずそのまま保持する条件を満たすか */
+function satisfiesXPassthrough(totalBytes: number, width: number, height: number): boolean {
+  return totalBytes < width * height * X_BYTE_LIMIT_RATIO && totalBytes < X_MAX_FILE_BYTES;
+}
 
 /** APP2 ICC プロファイルセグメントの識別子（Adobe/libjpeg の慣例。1 marker あたり最大 65519 byte） */
 const ICC_APP2_ID = "ICC_PROFILE\0";
@@ -212,16 +227,28 @@ export async function encodePqJpeg(imageData: ImageData, params: GainMapParams):
   }
   ctx.putImageData(pqImageData, 0, 0);
 
-  const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, "image/jpeg", PQ_JPEG_QUALITY);
-  });
-  if (!blob) {
-    throw new Error("JPEG エンコードに失敗しました");
-  }
-  const jpegBytes = new Uint8Array(await blob.arrayBuffer());
-
   const icc = await getIccProfile();
   const segments = buildIccProfileSegments(icc);
-  const insertOffset = findInsertionOffset(jpegBytes);
-  return insertSegments(jpegBytes, insertOffset, segments);
+
+  // X の再エンコード回避条件（byte < 幅×高さ・5MB 未満）を満たす最高品質を選ぶ。
+  // 最低品質でも満たせない場合はそのまま返す（X 以外の用途では依然有効なため）
+  let result: Uint8Array | null = null;
+  for (const quality of PQ_JPEG_QUALITY_CANDIDATES) {
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, "image/jpeg", quality);
+    });
+    if (!blob) {
+      throw new Error("JPEG エンコードに失敗しました");
+    }
+    const jpegBytes = new Uint8Array(await blob.arrayBuffer());
+    const insertOffset = findInsertionOffset(jpegBytes);
+    result = insertSegments(jpegBytes, insertOffset, segments);
+    if (satisfiesXPassthrough(result.length, pqImageData.width, pqImageData.height)) {
+      return result;
+    }
+  }
+  if (!result) {
+    throw new Error("JPEG エンコードに失敗しました");
+  }
+  return result;
 }
