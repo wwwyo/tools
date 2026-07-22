@@ -44,4 +44,41 @@
   .drl-no-limit {
     dynamic-range-limit: no-limit;
   }
+
+  /* 変換前プレビュー用。ホバーで no-limit に切り替わらないよう常に standard に固定する */
+  .drl-standard {
+    dynamic-range-limit: standard;
+  }
+
+  .dropzone-active {
+    border-color: var(--primary);
+    background-color: var(--accent);
+  }
+
+  /*
+   * ブランドアクセント用の「HDR の白」。CSS には HDR 色を直接指定する構文がまだ無い
+   * （Chrome 148 時点で color(rec2100-pq …) は未対応）ため、同梱の HDR PNG
+   * （Rec.2020 + PQ の白一色）を背景にして文字へクリップする。
+   * SDR 環境では普通の白として見えるので、そのままフォールバックになる。
+   */
+  .hdr-white-text {
+    dynamic-range-limit: no-limit;
+  }
+
+  /* background-clip: text 未対応の環境で color: transparent だけが効いて文字が消えないよう、
+     クリップと透明化は必ずセットで適用する */
+  @supports ((background-clip: text) or (-webkit-background-clip: text)) {
+    .hdr-white-text {
+      background-image: url("./hdr.png");
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+  }
+
+  /* border-image には border-radius が効かないため、角は直角になる（ブランド表現として許容） */
+  .hdr-white-border {
+    border-image: url("./hdr.png") 2 stretch;
+    dynamic-range-limit: no-limit;
+  }
 }
