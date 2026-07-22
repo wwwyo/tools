@@ -269,6 +269,15 @@ function ogPlugin(): Plugin {
         res.end(await renderOgPng(await ogMetaFor(card)));
       });
     },
+    // PNG エンドポイントは毎リクエスト再レンダリングだが、virtual:og-cards はモジュール
+    // グラフにキャッシュされ index.html の編集では無効化されない。title/description の
+    // 変更をサーバ再起動なしで /og/ デモページへ反映させるため、手動で invalidate する
+    handleHotUpdate({ file, server }) {
+      if (!/\/src\/(?:[^/]+\/)?index\.html$/.test(file)) return;
+      const mod = server.moduleGraph.getModuleById('\0virtual:og-cards');
+      if (mod) server.moduleGraph.invalidateModule(mod);
+      server.ws.send({ type: 'full-reload' });
+    },
     async generateBundle() {
       await Promise.all(
         discoverOgCards().map(async (card) => {

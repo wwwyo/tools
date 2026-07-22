@@ -74,15 +74,22 @@ function TextBlock({
       >
         {title}
       </span>
+      {/* 文の途中で「HDR変 / 換。」のような不格好な折り返しが起きるため、
+          「。」区切りの文単位で行を分ける（一文だけの description は従来どおり1行） */}
       <span
         style={{
           display: 'flex',
+          flexDirection: 'column',
           fontSize: compact ? 24 : 32,
           color: colors.mutedForeground,
           marginTop: 28,
         }}
       >
-        {description}
+        {description.split(/(?<=。)/).filter((sentence) => sentence !== '').map((sentence, index) => (
+          <span key={index} style={{ display: 'flex' }}>
+            {sentence}
+          </span>
+        ))}
       </span>
     </div>
   );

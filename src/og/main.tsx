@@ -1,7 +1,7 @@
 import { StrictMode, type ComponentType } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../global.css';
-import { OgTemplate } from './template';
+import { OgTemplate, type OgColors } from './template';
 // vite-env.d.ts で型宣言した virtual module。ogPlugin が実際に生成するカード一覧をそのまま受け取る
 import { ogCards } from 'virtual:og-cards';
 
@@ -13,12 +13,14 @@ const CARD_HEIGHT = 630 * SCALE;
 // デモページはブラウザで動くので、build 時に動的 import する vite.config.ts 側とは別に
 // glob で src/<dir>/og.tsx を集めて React 描画側の preview に使う（og.tsx が無いツールもある
 // ので eager import の結果が空でも構わない）
-const ogPreviewModules = import.meta.glob<{ default: ComponentType }>('../*/og.tsx', {
-  eager: true,
-});
+const ogPreviewModules = import.meta.glob<{ default: ComponentType; ogColors?: Partial<OgColors> }>(
+  '../*/og.tsx',
+  { eager: true },
+);
 
-function findOgPreview(cardName: string): ComponentType | undefined {
-  return ogPreviewModules[`../${cardName}/og.tsx`]?.default;
+function findOgModule(cardName: string): { Preview: ComponentType; colors?: Partial<OgColors> } | undefined {
+  const mod = ogPreviewModules[`../${cardName}/og.tsx`];
+  return mod ? { Preview: mod.default, colors: mod.ogColors } : undefined;
 }
 
 function App() {
@@ -30,7 +32,7 @@ function App() {
         （フォントレンダリングなど satori 特有の差分が出るのでここで見比べる）
       </p>
       {ogCards.map((card) => {
-        const Preview = findOgPreview(card.name);
+        const ogModule = findOgModule(card.name);
         return (
         <section key={card.name} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>
@@ -52,7 +54,8 @@ function App() {
                   <OgTemplate
                     title={card.title}
                     description={card.description}
-                    preview={Preview ? <Preview /> : undefined}
+                    preview={ogModule ? <ogModule.Preview /> : undefined}
+                    colors={ogModule?.colors}
                     // 画像生成側は data URL を使うが、ブラウザ描画では公開パスで足りる
                     iconSrc={card.name === 'index' ? '/apple-touch-icon.png' : undefined}
                   />
