@@ -3,29 +3,25 @@
  *
  * UltraHDR は「ベース JPEG + ゲインマップのメタデータ」で明るさを表現するため、
  * X などアップロード時にメタデータ（XMP/MPF）を剥がすサービスでは SDR に落ちる。
- * こちらは画素値そのものを Rec.2020 の絶対輝度として PQ で符号化し、その意味を
- * 復元するための ICC プロファイル（Rec.2020 + PQ）を埋め込む。画素と ICC は
+ * こちらは画素値そのものを Display P3 の絶対輝度として PQ で符号化し、その意味を
+ * 復元するための ICC プロファイル（P3 + PQ、matrix/TRC 型 + cicp）を埋め込む。画素と ICC は
  * 再エンコードしても失われないため、メタデータ非対応の環境でも HDR 表示が生き残る。
+ *
+ * ICC は LUT 型（A2B0/B2A0）だと X の再エンコードパイプラインで脱落することが確認できたため、
+ * matrix/TRC 型 + cicp（P3PQIccProfile、p3pq-icc.ts）を clean-room 生成して使う。
  */
 
 import { LUMA_B, LUMA_G, LUMA_R, SRGB_TO_LINEAR_LUT, gainAt, type GainMapParams } from "./convert";
+import { buildP3PqIccProfile, SRGB_TO_P3_LINEAR } from "./p3pq-icc";
 import { findInsertionOffset, insertSegments, writeUint16BE } from "./ultrahdr";
-import hdrPngUrl from "./hdr.png";
 
 /** SDR 基準白（相対輝度 1.0）を割り当てる絶対輝度（BT.2408 の参照値） */
 const SDR_WHITE_NITS = 203;
 /** PQ (ST 2084) の正規化基準輝度 */
 const PQ_NORMALIZATION_NITS = 10000;
 
-/**
- * Rec.709(sRGB) 線形光 → Rec.2020 線形光の 3x3 行列。
- * 両色空間とも白色点が D65 で共通なため色順応変換は不要で、原色変換の行列を掛けるだけでよい。
- */
-const REC709_TO_REC2020: readonly (readonly [number, number, number])[] = [
-  [0.6274039, 0.329283, 0.0433131],
-  [0.0690973, 0.9195404, 0.0113623],
-  [0.0163914, 0.0880133, 0.8955953],
-];
+/** X の成功レシピが「長辺 3000px 以下に縮小してから PQ 符号化する」としているためのキャップ */
+const PQ_EXPORT_MAX_LONG_EDGE = 3000;
 
 /** ST 2084 (PQ) 逆 EOTF の定数（SMPTE ST 2084 / Rec.2100 で定義された値） */
 const PQ_M1 = 2610 / 16384;
@@ -63,11 +59,11 @@ export function encodePqPixels(imageData: ImageData, params: GainMapParams): Ima
   const maxGain = 2 ** maxGainLog2;
   const threshold = Math.min(0.95, curve * 0.95);
 
-  const m0 = REC709_TO_REC2020[0];
-  const m1 = REC709_TO_REC2020[1];
-  const m2 = REC709_TO_REC2020[2];
+  const m0 = SRGB_TO_P3_LINEAR[0];
+  const m1 = SRGB_TO_P3_LINEAR[1];
+  const m2 = SRGB_TO_P3_LINEAR[2];
   if (!m0 || !m1 || !m2) {
-    throw new Error("REC709_TO_REC2020 matrix is malformed");
+    throw new Error("SRGB_TO_P3_LINEAR matrix is malformed");
   }
 
   const { width, height, data } = imageData;
@@ -91,13 +87,13 @@ export function encodePqPixels(imageData: ImageData, params: GainMapParams): Ima
     const gGained = gLin * gain;
     const bGained = bLin * gain;
 
-    const r2020 = m0[0] * rGained + m0[1] * gGained + m0[2] * bGained;
-    const g2020 = m1[0] * rGained + m1[1] * gGained + m1[2] * bGained;
-    const b2020 = m2[0] * rGained + m2[1] * gGained + m2[2] * bGained;
+    const rP3 = m0[0] * rGained + m0[1] * gGained + m0[2] * bGained;
+    const gP3 = m1[0] * rGained + m1[1] * gGained + m1[2] * bGained;
+    const bP3 = m2[0] * rGained + m2[1] * gGained + m2[2] * bGained;
 
-    out[i] = Math.round(linearToPq(r2020) * 255);
-    out[i + 1] = Math.round(linearToPq(g2020) * 255);
-    out[i + 2] = Math.round(linearToPq(b2020) * 255);
+    out[i] = Math.round(linearToPq(rP3) * 255);
+    out[i + 1] = Math.round(linearToPq(gP3) * 255);
+    out[i + 2] = Math.round(linearToPq(bP3) * 255);
     out[i + 3] = a8;
   }
 
@@ -155,59 +151,38 @@ function buildIccProfileSegments(icc: Uint8Array): Uint8Array[] {
   return segments;
 }
 
-async function fetchHdrPngBytes(): Promise<Uint8Array> {
-  const response = await fetch(hdrPngUrl);
-  return new Uint8Array(await response.arrayBuffer());
-}
-
 /**
- * PNG チャンクを走査して iCCP チャンクの中身（圧縮前のプロファイル名 + 圧縮方式 + zlib 圧縮データ）
- * のうち zlib 圧縮データ部分を取り出す。iCCP が見つからない、または圧縮方式が zlib(0) 以外の
- * PNG は本ツールが同梱する hdr.png の前提から外れるためエラーにする。
+ * 長辺が PQ_EXPORT_MAX_LONG_EDGE を超える場合のみ canvas でリサイズする。
+ * X の成功レシピが「長辺 3000px 以下」を条件にしているため、convert.ts の
+ * 読み込み時キャップ（4096px）より小さい値で PQ 符号化直前にもう一段キャップする。
  */
-function extractCompressedIccFromPng(png: Uint8Array): Uint8Array {
-  const decoder = new TextDecoder("latin1");
-  let offset = 8; // PNG シグネチャ(8byte)の直後から
-  while (offset + 8 <= png.length) {
-    const chunkHeader = new DataView(png.buffer, png.byteOffset + offset, 8);
-    const length = chunkHeader.getUint32(0);
-    const type = decoder.decode(png.subarray(offset + 4, offset + 8));
-    const dataStart = offset + 8;
-    if (dataStart + length > png.length) {
-      throw new Error(`malformed PNG chunk "${type}": declared length exceeds buffer size`);
-    }
-    if (type === "iCCP") {
-      const chunkData = png.subarray(dataStart, dataStart + length);
-      let nameEnd = 0;
-      while (nameEnd < chunkData.length && chunkData[nameEnd] !== 0) nameEnd++;
-      const compressionMethod = chunkData[nameEnd + 1];
-      if (compressionMethod !== 0) {
-        throw new Error(`unsupported iCCP compression method: ${compressionMethod}`);
-      }
-      return chunkData.subarray(nameEnd + 2);
-    }
-    if (type === "IEND") break;
-    offset = dataStart + length + 4; // + CRC(4byte)
+function resizeForPqExport(imageData: ImageData): ImageData {
+  const longEdge = Math.max(imageData.width, imageData.height);
+  if (longEdge <= PQ_EXPORT_MAX_LONG_EDGE) {
+    return imageData;
   }
-  throw new Error("hdr.png に iCCP チャンクが見つかりませんでした");
-}
+  const scale = PQ_EXPORT_MAX_LONG_EDGE / longEdge;
+  const width = Math.max(1, Math.round(imageData.width * scale));
+  const height = Math.max(1, Math.round(imageData.height * scale));
 
-/** PNG の iCCP が持つ zlib (RFC1950) 圧縮データを伸長する */
-async function inflateZlib(compressed: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([compressed.slice()]).stream().pipeThrough(new DecompressionStream("deflate"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = imageData.width;
+  srcCanvas.height = imageData.height;
+  const srcCtx = srcCanvas.getContext("2d");
+  if (!srcCtx) {
+    throw new Error("2d context を取得できませんでした");
+  }
+  srcCtx.putImageData(imageData, 0, 0);
 
-let iccProfilePromise: Promise<Uint8Array> | null = null;
-
-/**
- * hdr.png（Rec.2020 + PQ の ICC プロファイルを iCCP チャンクに持つ）から ICC プロファイルの
- * バイト列を取り出す。fetch・PNG パース・伸長はいずれも一度きりでよいため、
- * 初回呼び出しの Promise をモジュール内にキャッシュして使い回す。
- */
-function getIccProfile(): Promise<Uint8Array> {
-  iccProfilePromise ??= fetchHdrPngBytes().then(extractCompressedIccFromPng).then(inflateZlib);
-  return iccProfilePromise;
+  const dstCanvas = document.createElement("canvas");
+  dstCanvas.width = width;
+  dstCanvas.height = height;
+  const dstCtx = dstCanvas.getContext("2d");
+  if (!dstCtx) {
+    throw new Error("2d context を取得できませんでした");
+  }
+  dstCtx.drawImage(srcCanvas, 0, 0, width, height);
+  return dstCtx.getImageData(0, 0, width, height);
 }
 
 /**
@@ -216,7 +191,8 @@ function getIccProfile(): Promise<Uint8Array> {
  * と ICC セグメントの組み立てはバイト列操作のみなので分離してある。
  */
 export async function encodePqJpeg(imageData: ImageData, params: GainMapParams): Promise<Uint8Array> {
-  const pqImageData = encodePqPixels(imageData, params);
+  const cappedImageData = resizeForPqExport(imageData);
+  const pqImageData = encodePqPixels(cappedImageData, params);
 
   const canvas = document.createElement("canvas");
   canvas.width = pqImageData.width;
@@ -227,7 +203,7 @@ export async function encodePqJpeg(imageData: ImageData, params: GainMapParams):
   }
   ctx.putImageData(pqImageData, 0, 0);
 
-  const icc = await getIccProfile();
+  const icc = buildP3PqIccProfile();
   const segments = buildIccProfileSegments(icc);
 
   // X の再エンコード回避条件（byte < 幅×高さ・5MB 未満）を満たす最高品質を選ぶ。

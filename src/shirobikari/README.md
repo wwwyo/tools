@@ -18,7 +18,9 @@
 
 ## PQ JPEG とは（pqjpeg.ts）
 
-画素ごとに sRGB→線形→（UltraHDR と同じゲインカーブで）ゲインを乗算→ sRGB primaries を Rec.2020 primaries に変換→ PQ (ST 2084) で符号化した JPEG。相対輝度 1.0（SDR の白）を **203 cd/m²**（BT.2408 の SDR 基準輝度）として絶対輝度に換算してから PQ 逆 EOTF（10000 nits 正規化）にかける。これにより 1.0 stop のヘッドルームなら 2×203=406 nits まで明るさを表現できる。ICC プロファイルは同梱の `hdr.png` の iCCP チャンクから実行時に抽出して埋め込む（Rec.2020 + PQ、profile description は `"Rec2020 Gamut with PQ Transfer"`）。UltraHDR と違い、HDR かどうかの情報がメタデータではなく画素そのものなので、再エンコードで XMP/MPF が失われても壊れない。
+画素ごとに sRGB→線形→（UltraHDR と同じゲインカーブで）ゲインを乗算→ sRGB primaries を Display P3 primaries に変換→ PQ (ST 2084) で符号化した JPEG。相対輝度 1.0（SDR の白）を **203 cd/m²**（BT.2408 の SDR 基準輝度）として絶対輝度に換算してから PQ 逆 EOTF（10000 nits 正規化）にかける。これにより 1.0 stop のヘッドルームなら 2×203=406 nits まで明るさを表現できる。長辺が **3000px** を超える場合は PQ 符号化の直前に canvas でリサイズする（X の HDR 表示が生き残る成功レシピが「長辺 3000px 以下」を条件にしているため。読み込み時キャップの 4096px より小さい）。
+
+ICC プロファイルは `p3pq-icc.ts` の `buildP3PqIccProfile()` で実行時に clean-room 生成する（matrix/TRC 型 + `cicp` タグ [12, 16, 0, 1] = Display P3 色域 + PQ 転送関数）。以前は同梱の `hdr.png` の iCCP チャンクから LUT 型（A2B0/B2A0）の Rec.2020 + PQ プロファイルを抽出して埋め込んでいたが、**X へ投稿すると再エンコードパイプラインで LUT 型 ICC ごと脱落し HDR 表示が壊れる**ことが確認できたため、X を生き残った実績のある matrix/TRC + cicp 構成に作り替えた。`cicp` を解釈するデコーダ（Chrome / X 系）は TRC を無視して cicp で HDR 解釈するため実害はないが、cicp を見ず ICC の TRC しか解釈しない古いデコーダでは SDR 基準白 203 nits 以上が意図的に白飛びする（graceful degradation）。UltraHDR と違い、HDR かどうかの情報がメタデータではなく画素そのものなので、再エンコードで XMP/MPF が失われても壊れない。
 
 ## UltraHDR JPEG とは
 
@@ -28,7 +30,7 @@
 
 1. **読み込み（convert.ts）**: `createImageBitmap` → canvas → `getImageData`。長辺 4096px にキャップ、アルファは白背景に flatten。この ImageData は PQ 再変換用に main.ts の state にもキャッシュする
 2. **ゲインマップ合成（convert.ts）**: 画素ごとに sRGB→線形（256 要素 LUT）→ Rec.709 係数で輝度を計算し、1/4 解像度に平均。ゲインは `1 + (maxGain - 1) * ((1 - curve) + curve * smoothstep(threshold, 1, luma))` で、curve=0 なら一様、curve=1 ならハイライトのみ持ち上がる。輝度マップとベース JPEG はスライダーに依存しないため画像ロード時に1回だけ計算してキャッシュし、スライダー変更時はゲイン計算だけやり直す（LUT と `gainAt` は pqjpeg.ts でも再利用する）
-3-a. **PQ JPEG 生成（pqjpeg.ts）**: フル解像度で画素ごとにゲイン適用 → primaries 変換 → PQ 符号化し、canvas 経由で JPEG エンコードした後に APP2 `ICC_PROFILE` セグメントを挿入する。ダウンサンプルしたゲインマップは使わず、画素ごとの輝度からその場でゲインを計算する（スライダー変更のたびにフル解像度を再計算するのはこのため）
+3-a. **PQ JPEG 生成（pqjpeg.ts）**: 長辺が 3000px を超える場合は canvas でリサイズしたうえで、フル解像度で画素ごとにゲイン適用 → primaries 変換（sRGB→Display P3）→ PQ 符号化し、canvas 経由で JPEG エンコードした後に APP2 `ICC_PROFILE` セグメントを挿入する。ICC は `p3pq-icc.ts` の `buildP3PqIccProfile()` が clean-room 生成する（matrix/TRC + cicp [12,16,0,1]）。ダウンサンプルしたゲインマップは使わず、画素ごとの輝度からその場でゲインを計算する（スライダー変更のたびにフル解像度を再計算するのはこのため）
 3-b. **UltraHDR コンテナ組み立て（ultrahdr.ts）**: ベース JPEG とゲインマップ JPEG のバイト列に XMP（`hdrgm` メタデータ + `Container:Directory`）と MPF（APP2）を挿入して連結する。依存ライブラリなし・ブラウザ API 非依存（入出力は Uint8Array）なので bun で単体検証できる。副形式なので main.ts はこの結果をキャッシュせず、ボタン押下のたびに組み立てる
 4. **ダウンロード（main.ts）**: Blob URL + `<a download>`
 
@@ -51,8 +53,9 @@ shirobikari/
 ├── main.ts        コンバータ UI・イベント配線・状態管理
 ├── convert.ts     画像読み込み・輝度マップ・ゲインマップ合成
 ├── pqjpeg.ts      PQ JPEG 生成（画素の PQ 符号化 + ICC プロファイル埋め込み）。デフォルト出力
+├── p3pq-icc.ts    P3 PQ の ICC v4 プロファイル生成（matrix/TRC + cicp、clean-room）。pqjpeg.ts が使う
 ├── ultrahdr.ts    UltraHDR JPEG コンテナ組み立て（XMP / MPF のバイナリ生成）。副形式
 ├── demos.ts       解説デモ（dynamic-range-limit / HDR PNG / WebGPU）
-├── hdr.png        HDR の白一色 PNG（解説デモ + ブランドアクセント + PQ JPEG の ICC 抽出元）
+├── hdr.png        HDR の白一色 PNG（解説デモ + ブランドアクセント用。PQ JPEG の ICC はもう抽出しない）
 └── ultra-hdr.jpg  UltraHDR サンプル（mdn/shared-assets 由来。解説デモに使用）
 ```

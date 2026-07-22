@@ -76,16 +76,12 @@ appEl.innerHTML = `
         </figure>
       </div>
       <p id="converting-status" class="hidden text-xs text-muted-foreground">変換中…</p>
-      <p class="text-xs text-muted-foreground">
-        PQ JPEG = X などの SNS 投稿向け。
-        UltraHDR JPEG = 非対応環境で普通の JPEG に見える共有向け。
-      </p>
       <div class="flex flex-wrap justify-end gap-2">
         <button
           type="button"
           id="download-ultrahdr-button"
           disabled
-          class="cursor-pointer border border-border px-3 py-1.5 text-sm text-muted-foreground transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring"
+          class="hdr-white-text hdr-white-border cursor-pointer border px-3 py-1.5 text-sm transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring"
         >ダウンロード (UltraHDR)</button>
         <button
           type="button"
