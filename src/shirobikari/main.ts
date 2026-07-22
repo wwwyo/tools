@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import "../global.css";
 import "./styles.css";
-import gioiaHdrJpg from "./gioia-pixel-ultrahdr.jpg";
+import ultraHdrJpg from "./ultra-hdr.jpg";
 import hdrPng from "./hdr.png";
 
 const appEl = document.getElementById("app");
@@ -38,15 +38,32 @@ appEl.innerHTML = `
         <p class="text-sm text-muted-foreground">
           このプロパティは上限を外すだけで、明るさを作り出すわけではありません。元画像が HDR の
           輝度情報を持っていない普通の sRGB 画像なら、<code>no-limit</code> にしても見た目は変わりません。
-          ここで使っているのは Pixel が撮った UltraHDR 形式の JPEG で、通常の JPEG に加えて
+          ここで使っているのは UltraHDR 形式の JPEG で、通常の JPEG に加えて
           「どこをどれだけ持ち上げるか」を記録したゲインマップを内包しています。
+        </p>
+        <p class="text-xs text-muted-foreground">
+          この項目のデモとサンプル画像は
+          <a
+            href="https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/dynamic-range-limit"
+            target="_blank"
+            rel="noreferrer"
+            class="underline underline-offset-2 hover:text-foreground"
+          >MDN Web Docs: dynamic-range-limit</a>
+          の例をもとにしています。画像は
+          <a
+            href="https://mdn.github.io/shared-assets/images/examples/ultra-hdr.jpg"
+            target="_blank"
+            rel="noreferrer"
+            class="underline underline-offset-2 hover:text-foreground"
+          >mdn/shared-assets の ultra-hdr.jpg</a>
+          です。
         </p>
       </div>
       <div id="drl-unsupported" class="hidden rounded border border-dashed border-border px-4 py-3 text-sm text-muted-foreground"></div>
       <div class="flex flex-col gap-6 sm:flex-row">
         <figure class="flex flex-1 flex-col gap-2">
           <img
-            src="${gioiaHdrJpg}"
+            src="${ultraHdrJpg}"
             alt="UltraHDR形式のサンプル写真。ホバーまたはフォーカスすると白い部分の明るさが変わる"
             tabindex="0"
             class="drl-hover w-full rounded border border-border"
@@ -55,7 +72,7 @@ appEl.innerHTML = `
         </figure>
         <figure class="flex flex-1 flex-col gap-2">
           <img
-            src="${gioiaHdrJpg}"
+            src="${ultraHdrJpg}"
             alt="同じUltraHDR写真をno-limit固定で表示したもの。常に最大輝度で表示される"
             class="drl-no-limit w-full rounded border border-border"
           />
@@ -86,27 +103,40 @@ appEl.innerHTML = `
       <div class="flex flex-col gap-1.5">
         <h2 class="text-lg font-bold">3. WebGPU で SDR と HDR を並べて描く</h2>
         <p class="text-sm text-muted-foreground">
-          WebGPU の <code>toneMapping: { mode: "extended" }</code> と
-          <code>format: "rgba16float"</code> を使うと、1.0 を超える輝度値（白より明るい色）を
-          直接描画できます。左が通常の <code>standard</code>、右が <code>extended</code> です。
-          スライダーで明るさを上げると、右側だけ白の上限を超えて光り続けます。
+          左は <code>format: navigator.gpu.getPreferredCanvasFormat()</code>（8bit）の canvas です。
+          8bit フォーマットは 1.0 を超える値を物理的に保持できないため、レンダーターゲットへの
+          書き込み時点でクランプが確定します。<code>toneMapping</code> の実装差にもコンポジタの
+          挙動にも依存しない、本物の SDR パイプラインです。右は <code>format: "rgba16float"</code> +
+          <code>toneMapping: { mode: "extended" }</code> で、1.0 を超えるコード値をそのまま出力できます。
+        </p>
+        <p class="text-sm text-muted-foreground">
+          比べるべきは「明るさ」ではなく、上半分のランプがどこまで伸びるかです。左は
+          100 cd/m²（SDR の白）に到達すると、そこから右がずっと平坦になります。右は端まで明るくなり続けます。
+          「どこで階調が止まったか」が差になります。HDR 非対応のディスプレイ・ブラウザでは
+          両方同じ見た目になるのが正しい挙動です。
+        </p>
+        <p class="text-sm text-muted-foreground">
+          スライダーはディスプレイが実際に出す明るさの単位である cd/m² で指定しますが、canvas
+          に渡す値は輝度そのものではなく extended sRGB のコード値なので、内部で換算しています。
+          SDR の白は 100 cd/m²（コード値 1.0）が基準です。指定した輝度が実際に出るかはディスプレイの
+          ヘッドルーム次第で、XDR でもピーク輝度は 1600 cd/m² 程度なので、上限付近では頭打ちになります。
         </p>
       </div>
       <div id="gradient-unsupported" class="hidden rounded border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"></div>
       <div id="gradient-canvases" class="hidden flex-col gap-6 sm:flex-row">
         <div class="flex flex-1 flex-col gap-2">
-          <h3 class="text-sm font-bold text-muted-foreground">SDR（standard トーンマッピング）</h3>
+          <h3 class="text-sm font-bold text-muted-foreground">SDR（8bit・クランプ確定）</h3>
           <canvas id="canvas-sdr" width="400" height="300" class="w-full rounded border border-border"></canvas>
         </div>
         <div class="flex flex-1 flex-col gap-2">
-          <h3 class="text-sm font-bold text-muted-foreground">HDR（extended トーンマッピング）</h3>
+          <h3 class="text-sm font-bold text-muted-foreground">HDR（rgba16float・extended）</h3>
           <canvas id="canvas-hdr" width="400" height="300" class="w-full rounded border border-border"></canvas>
         </div>
       </div>
       <label id="gradient-controls" class="hidden flex-col gap-1.5 text-sm sm:flex-row sm:items-center sm:gap-3">
-        <span class="text-muted-foreground">トーンマッピングの明るさ</span>
-        <input type="range" id="brightness" min="0.5" max="4" step="0.1" value="1.5" class="w-full accent-primary sm:max-w-64" />
-        <span id="brightness-value" class="font-mono text-xs tabular-nums">1.5</span>
+        <span class="text-muted-foreground">ランプ右端の輝度（cd/m²）</span>
+        <input type="range" id="brightness" min="100" max="2000" step="50" value="400" class="w-full accent-primary sm:max-w-64" />
+        <span id="brightness-value" class="font-mono text-xs tabular-nums">400 cd/m²</span>
       </label>
     </section>
 
@@ -114,18 +144,23 @@ appEl.innerHTML = `
       <div class="flex flex-col gap-1.5">
         <h2 class="text-lg font-bold">4. 単色で輝度だけを比較する</h2>
         <p class="text-sm text-muted-foreground">
-          形や模様を取り除き、同じ色を輝度だけ変えて並べます。左は輝度 1.0（SDR 相当の上限）に
-          固定、右はスライダーで選んだ輝度です。HDR ディスプレイでは右側がより明るく光って見えます。
+          形や模様を取り除き、同じ色を輝度だけ変えて並べます。左は 100 cd/m²（SDR の白）に固定、
+          右はスライダーで選んだ輝度（cd/m²）です。HDR ディスプレイでは右側がより明るく光って見えます。
+        </p>
+        <p class="text-sm text-muted-foreground">
+          ここも指定は cd/m² ですが、canvas に渡すのは extended sRGB のコード値なので内部で
+          換算しています。SDR の白は 100 cd/m²（コード値 1.0）基準で、XDR でもピーク輝度は
+          1600 cd/m² 程度なので、上限付近では指定どおりの明るさにならず頭打ちになります。
         </p>
       </div>
       <div id="solid-unsupported" class="hidden rounded border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"></div>
       <div id="solid-canvases" class="hidden flex-col gap-6 sm:flex-row">
         <div class="flex flex-1 flex-col gap-2">
-          <h3 class="text-sm font-bold text-muted-foreground">輝度 1.0（SDR相当）</h3>
+          <h3 class="text-sm font-bold text-muted-foreground">100 cd/m²（SDR の白）</h3>
           <canvas id="canvas-solid-sdr" width="400" height="200" class="w-full rounded border border-border"></canvas>
         </div>
         <div class="flex flex-1 flex-col gap-2">
-          <h3 class="text-sm font-bold text-muted-foreground">輝度 <span id="hdr-brightness-label">2.0</span>（HDR）</h3>
+          <h3 class="text-sm font-bold text-muted-foreground"><span id="hdr-brightness-label">400</span> cd/m²（HDR）</h3>
           <canvas id="canvas-solid-hdr" width="400" height="200" class="w-full rounded border border-border"></canvas>
         </div>
       </div>
@@ -143,9 +178,9 @@ appEl.innerHTML = `
           </select>
         </label>
         <label class="flex flex-1 items-center gap-2">
-          <span class="text-muted-foreground">HDR輝度</span>
-          <input type="range" id="solid-brightness" min="1" max="5" step="0.1" value="2" class="w-full accent-primary" />
-          <span id="solid-brightness-value" class="font-mono text-xs tabular-nums">2.0</span>
+          <span class="text-muted-foreground">輝度（cd/m²）</span>
+          <input type="range" id="solid-brightness" min="100" max="2000" step="50" value="400" class="w-full accent-primary" />
+          <span id="solid-brightness-value" class="font-mono text-xs tabular-nums">400 cd/m²</span>
         </label>
       </div>
     </section>
@@ -182,6 +217,19 @@ function renderSupportList(items: SupportItem[]): void {
 function showUnsupportedMessage(el: HTMLElement, message: string): void {
   el.textContent = message;
   el.classList.remove("hidden");
+}
+
+/** SDR の基準白の輝度。Rec.709 / sRGB のスタジオ基準値 */
+const SDR_WHITE_CD = 100;
+
+/**
+ * cd/m² を extended sRGB のコード値へ変換する。
+ * canvas の値は線形光ではなく sRGB 伝達関数でエンコードされたコード値として
+ * 解釈されるため、輝度をそのまま渡すと桁違いに明るくなる。
+ */
+function cdToCodeValue(cd: number): number {
+  const linear = cd / SDR_WHITE_CD;
+  return linear <= 0.0031308 ? linear * 12.92 : 1.055 * Math.pow(linear, 1 / 2.4) - 0.055;
 }
 
 // 単色用シェーダー（vec4fでアライメント問題を回避）
@@ -273,44 +321,63 @@ const gradientShaderCode = `
       uv.y
     );
 
-    // 輝度バー（上部）- HDRでは1.0を超える値が可能
-    if (uv.y > 0.82) {
+    // WebGPU の NDC→フレームバッファ変換により、uv.y は 0 が画面上端・1 が画面下端になる。
+    // 輝度ランプを画面上半分（uv.y < 0.5）に大きく取り、SDR/HDR の差の主役にする。
+    // 装飾の円と離すことで、SDR 側が「どこで階調が止まるか」を邪魔されずに見せる。
+    if (uv.y < 0.5) {
       let barLuminance = uv.x * brightness * 2.0;
       color = vec3f(barLuminance);
+
+      // 目盛り線: 0.25 / 0.5 / 0.75 の位置に細い基準線を引く（暗めのグレーで、飽和しても潰れない）
+      let grid1 = 1.0 - smoothstep(0.0, 0.0015, abs(uv.x - 0.25));
+      let grid2 = 1.0 - smoothstep(0.0, 0.0015, abs(uv.x - 0.5));
+      let grid3 = 1.0 - smoothstep(0.0, 0.0015, abs(uv.x - 0.75));
+      color = mix(color, vec3f(0.4), (grid1 + grid2 + grid3) * 0.4);
+
+      // barLuminance = uv.x * brightness * 2.0 が 1.0 と交わる x 位置 = 1.0 / (brightness * 2.0)。
+      // ここが SDR の白 = 100 cd/m²（コード値 1.0）に一致する位置なので、目印として示す。
+      // 輝度を 1.0 未満（0.9, 0.35, 0.05）に抑えているので、SDR 側でも飽和せず目印として見える。
+      let thresholdX = 1.0 / (brightness * 2.0);
+      if (thresholdX <= 1.0) {
+        let distToThreshold = abs(uv.x - thresholdX);
+        let marker = 1.0 - smoothstep(0.0, 0.004, distToThreshold);
+        color = mix(color, vec3f(0.9, 0.35, 0.05), marker);
+      }
     }
 
-    // 輝く円たち
+    // 輝く円たち（画面下半分に配置。ランプ帯（uv.y<0.5）を汚さないよう境界に余白を残す）
     let aspect = 400.0 / 300.0;
     let p = vec2f(uv.x * aspect, uv.y);
 
     // 赤い円
-    let redCenter = vec2f(0.33 * aspect, 0.5);
+    let redCenter = vec2f(0.33 * aspect, 0.86);
     let redGlow = smoothCircle(p, redCenter, 0.12, 0.15);
     let redColor = vec3f(brightness * 1.5, 0.1, 0.1) * redGlow;
     color += redColor;
 
     // 緑の円
-    let greenCenter = vec2f(0.5 * aspect, 0.5);
+    let greenCenter = vec2f(0.5 * aspect, 0.86);
     let greenGlow = smoothCircle(p, greenCenter, 0.12, 0.15);
     let greenColor = vec3f(0.1, brightness * 1.5, 0.1) * greenGlow;
     color += greenColor;
 
     // 青い円
-    let blueCenter = vec2f(0.67 * aspect, 0.5);
+    let blueCenter = vec2f(0.67 * aspect, 0.86);
     let blueGlow = smoothCircle(p, blueCenter, 0.12, 0.15);
     let blueColor = vec3f(0.1, 0.1, brightness * 1.5) * blueGlow;
     color += blueColor;
 
-    // 白い輝く円（中央下）- HDRで最も効果的
-    let whiteCenter = vec2f(0.5 * aspect, 0.25);
+    // 白い輝く円 - 係数を 2.5 から 0.6 に下げた。スライダー既定値(1.5)で 0.9 と 1.0 未満に収まり、
+    // SDR 側でも階調を保ったまま光る。ここが飽和すると「白飽和 vs 白超え」の差になり、
+    // 主役であるランプの「階調が止まる/止まらない」という構造の差が霞んでしまうため。
+    let whiteCenter = vec2f(0.5 * aspect, 0.72);
     let whiteGlow = smoothCircle(p, whiteCenter, 0.1, 0.12);
-    // HDRでは2.0以上の値で「白より明るい」を表現
-    let whiteColor = vec3f(brightness * 2.5) * whiteGlow;
+    let whiteColor = vec3f(brightness * 0.6) * whiteGlow;
     color += whiteColor;
 
     // パルスする輝点（アニメーション）
     let pulseIntensity = 0.5 + 0.5 * sin(time * 2.0);
-    let sparkleCenter = vec2f(0.5 * aspect, 0.65);
+    let sparkleCenter = vec2f(0.5 * aspect, 0.95);
     let sparkleGlow = smoothCircle(p, sparkleCenter, 0.03, 0.05);
     let sparkleColor = vec3f(brightness * 3.0 * pulseIntensity) * sparkleGlow;
     color += sparkleColor;
@@ -321,19 +388,34 @@ const gradientShaderCode = `
 
 type ToneMappingMode = "standard" | "extended";
 
+/**
+ * canvas に適用する WebGPU の描画設定。
+ * SDR 側は 8bit フォーマット（クランプが GPU 側で確定する）、HDR 側は rgba16float +
+ * extended という異なる設定を使うため、レンダラーの外から可変にする。
+ * `fragment.targets[0].format` は canvas の configure() の format と一致している必要があるため、
+ * このオブジェクト1つを両方に使い回すことで不一致を構造的に防ぐ。
+ */
+type CanvasRenderConfig = {
+  readonly format: GPUTextureFormat;
+  readonly toneMapping?: ToneMappingMode;
+};
+
+/** getConfiguration() から読み取った、実際に適用されている設定の自己診断結果 */
+type ConfigDiagnostics = { readonly ok: boolean; readonly detail: string };
+
 /** グラデーションの輝く円たちを描くレンダラー */
 class GradientHDRRenderer {
   private readonly canvas: HTMLCanvasElement;
-  private readonly toneMappingMode: ToneMappingMode;
+  private readonly renderConfig: CanvasRenderConfig;
   private device: GPUDevice | null = null;
   private context: GPUCanvasContext | null = null;
   private pipeline: GPURenderPipeline | null = null;
   private uniformBuffer: GPUBuffer | null = null;
   private bindGroup: GPUBindGroup | null = null;
 
-  constructor(canvas: HTMLCanvasElement, toneMappingMode: ToneMappingMode) {
+  constructor(canvas: HTMLCanvasElement, renderConfig: CanvasRenderConfig) {
     this.canvas = canvas;
-    this.toneMappingMode = toneMappingMode;
+    this.renderConfig = renderConfig;
   }
 
   async init(device: GPUDevice): Promise<void> {
@@ -344,11 +426,12 @@ class GradientHDRRenderer {
     }
     this.context = context;
 
-    // HDR用の設定: rgba16floatフォーマットとextendedトーンマッピング
     this.context.configure({
       device: this.device,
-      format: "rgba16float", // HDR用のフォーマット
-      toneMapping: { mode: this.toneMappingMode }, // "standard" or "extended"
+      format: this.renderConfig.format,
+      // SDR 側は toneMapping を指定しない（既定 = standard 相当）。8bit フォーマット自体が
+      // 1.0 超えの値を保持できないため、toneMapping の実装差に関係なくクランプが確定する。
+      ...(this.renderConfig.toneMapping ? { toneMapping: { mode: this.renderConfig.toneMapping } } : {}),
       alphaMode: "premultiplied",
     });
 
@@ -378,7 +461,8 @@ class GradientHDRRenderer {
       fragment: {
         module: shaderModule,
         entryPoint: "fragmentMain",
-        targets: [{ format: "rgba16float" }],
+        // canvas の configure() に渡した format と必ず一致させる（不一致は実行時例外になる）
+        targets: [{ format: this.renderConfig.format }],
       },
       primitive: { topology: "triangle-list" },
     });
@@ -387,6 +471,19 @@ class GradientHDRRenderer {
       layout: bindGroupLayout,
       entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }],
     });
+  }
+
+  /** getConfiguration()（Chrome 131+）で実際に適用された format / toneMapping.mode を読む自己診断 */
+  getConfigDiagnostics(): ConfigDiagnostics {
+    if (!this.context || typeof this.context.getConfiguration !== "function") {
+      return { ok: false, detail: "確認できません（getConfiguration 未対応。Chrome 131 以降が必要です）" };
+    }
+    const configuration = this.context.getConfiguration();
+    if (!configuration) {
+      return { ok: false, detail: "確認できません（context が未設定です）" };
+    }
+    const toneModeText = configuration.toneMapping?.mode ?? "指定なし（既定 = standard 相当）";
+    return { ok: true, detail: `format: ${configuration.format} / toneMapping.mode: ${toneModeText}` };
   }
 
   render(brightness: number, time: number): void {
@@ -564,8 +661,16 @@ async function initWebGpuDemos(): Promise<void> {
   renderSupportList(items);
 
   // グラデーションデモ
-  const sdrRenderer = new GradientHDRRenderer(document.getElementById("canvas-sdr") as HTMLCanvasElement, "standard");
-  const hdrRenderer = new GradientHDRRenderer(document.getElementById("canvas-hdr") as HTMLCanvasElement, "extended");
+  // SDR 側: 8bit フォーマット（通常 bgra8unorm）。1.0 超えの値を物理的に保持できないため、
+  // GPU 側の書き込み時点でクランプが確定する。toneMapping は指定しない（既定 = standard 相当）
+  const sdrRenderer = new GradientHDRRenderer(document.getElementById("canvas-sdr") as HTMLCanvasElement, {
+    format: navigator.gpu.getPreferredCanvasFormat(),
+  });
+  // HDR 側: rgba16float + extended。1.0 超えの輝度値をそのまま保持・出力できる
+  const hdrRenderer = new GradientHDRRenderer(document.getElementById("canvas-hdr") as HTMLCanvasElement, {
+    format: "rgba16float",
+    toneMapping: "extended",
+  });
   await sdrRenderer.init(device);
   await hdrRenderer.init(device);
   gradientCanvasesEl.classList.remove("hidden");
@@ -573,17 +678,28 @@ async function initWebGpuDemos(): Promise<void> {
   gradientControlsEl.classList.remove("hidden");
   gradientControlsEl.classList.add("flex");
 
+  // 自己診断: getConfiguration() で実際に適用された設定を読み、ブラウザが toneMapping を
+  // 無視しているようなケースを一目で切り分けられるようにする
+  const sdrDiagnostics = sdrRenderer.getConfigDiagnostics();
+  items.push({ label: "SDR canvas の適用設定", ok: sdrDiagnostics.ok, detail: sdrDiagnostics.detail });
+  const hdrDiagnostics = hdrRenderer.getConfigDiagnostics();
+  items.push({ label: "HDR canvas の適用設定", ok: hdrDiagnostics.ok, detail: hdrDiagnostics.detail });
+  renderSupportList(items);
+
   const brightnessInputEl = document.getElementById("brightness") as HTMLInputElement;
   const brightnessValueEl = document.getElementById("brightness-value") as HTMLSpanElement;
   const startTime = performance.now();
 
   function renderGradientFrame(): void {
-    const brightness = Number.parseFloat(brightnessInputEl.value);
-    brightnessValueEl.textContent = brightness.toFixed(1);
+    const brightnessCd = Number.parseFloat(brightnessInputEl.value);
+    brightnessValueEl.textContent = `${brightnessCd.toFixed(0)} cd/m²`;
     const time = (performance.now() - startTime) / 1000;
 
-    sdrRenderer.render(brightness, time);
-    hdrRenderer.render(brightness, time);
+    // ランプ右端（uv.x = 1）のコード値が brightness * 2.0 になる（シェーダ側の式）ため、
+    // 右端の輝度が指定した cd/m² と一致するよう半分にして渡す
+    const brightnessCode = cdToCodeValue(brightnessCd) / 2.0;
+    sdrRenderer.render(brightnessCode, time);
+    hdrRenderer.render(brightnessCode, time);
 
     requestAnimationFrame(renderGradientFrame);
   }
@@ -607,13 +723,13 @@ async function initWebGpuDemos(): Promise<void> {
   function updateSolidCanvases(): void {
     const color = colors[colorSelectEl.value] ?? colors.white;
     if (!color) return;
-    const solidBrightness = Number.parseFloat(solidBrightnessInputEl.value);
-    solidBrightnessValueEl.textContent = solidBrightness.toFixed(1);
-    hdrBrightnessLabelEl.textContent = solidBrightness.toFixed(1);
+    const solidBrightnessCd = Number.parseFloat(solidBrightnessInputEl.value);
+    solidBrightnessValueEl.textContent = `${solidBrightnessCd.toFixed(0)} cd/m²`;
+    hdrBrightnessLabelEl.textContent = solidBrightnessCd.toFixed(0);
 
-    // 左は常に輝度1.0、右は選択したHDR輝度
+    // 左は常に SDR の白（100 cd/m² = コード値 1.0）、右は選択した輝度をコード値に変換して描画
     solidSdrRenderer.render(color, 1.0);
-    solidHdrRenderer.render(color, solidBrightness);
+    solidHdrRenderer.render(color, cdToCodeValue(solidBrightnessCd));
   }
 
   colorSelectEl.addEventListener("change", updateSolidCanvases);
