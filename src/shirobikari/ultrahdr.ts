@@ -67,7 +67,13 @@ function findInsertionOffset(jpeg: Uint8Array): number {
   assertJpegSoi(jpeg);
   let offset = 2;
   if (jpeg[offset] === 0xff && jpeg[offset + 1] === MARKER_APP0) {
+    if (offset + 4 > jpeg.length) {
+      throw new Error(`unexpected end of buffer while reading APP0 segment length at ${offset}`);
+    }
     const length = readUint16BE(jpeg, offset + 2);
+    if (offset + 2 + length > jpeg.length) {
+      throw new Error(`APP0 segment length (${length}) exceeds buffer size (offset=${offset}, bufferLength=${jpeg.length})`);
+    }
     offset += 2 + length;
   }
   return offset;
@@ -169,6 +175,19 @@ const MPF_MP_ENTRY_SIZE = 16;
 const MPF_MP_ENTRIES_SIZE = MPF_MP_ENTRY_SIZE * 2;
 
 /**
+ * APP2 MPF セグメントの総バイト長（マーカー2byte + 長さフィールド2byte + 内容）。
+ * 内容の並びはすべて固定サイズで値に依存しないため、実際にセグメントを組み立てなくても
+ * 長さだけなら常に一定になる。assembleUltraHdrJpeg 側でオフセット計算のためだけに
+ * ダミーの buildApp2MpfSegment 呼び出しをするのを避けるためのヘルパーで、
+ * buildApp2MpfSegment 内の contentSize もここに一本化して二重定義を防ぐ。
+ */
+function mpfSegmentByteLength(): number {
+  const idLength = new TextEncoder().encode(MPF_APP2_ID).length;
+  const contentSize = idLength + MPF_TIFF_HEADER_SIZE + MPF_IFD_SIZE + MPF_MP_ENTRIES_SIZE;
+  return 4 + contentSize; // マーカー(2byte) + 長さフィールド(2byte) + 内容
+}
+
+/**
  * APP2 MPF セグメントを組み立てる。
  *
  * オフセットの基点は TIFF ヘッダ先頭（"MPF\0" の直後、エンディアンマーカー "MM" の位置）。
@@ -182,13 +201,13 @@ function buildApp2MpfSegment(params: {
   readonly gainMapDataOffset: number;
 }): Uint8Array {
   const idBytes = new TextEncoder().encode(MPF_APP2_ID);
-  const contentSize = idBytes.length + MPF_TIFF_HEADER_SIZE + MPF_IFD_SIZE + MPF_MP_ENTRIES_SIZE;
-  const length = 2 + contentSize; // 長さフィールド自身(2byte)を含む、マーカー(2byte)は含まない
+  const segmentByteLength = mpfSegmentByteLength();
+  const length = segmentByteLength - 2; // 長さフィールド自身(2byte)を含む、マーカー(2byte)は含まない
   if (length > 0xffff) {
     throw new Error(`MPF segment too large: ${length} bytes`);
   }
 
-  const segment = new Uint8Array(2 + length);
+  const segment = new Uint8Array(segmentByteLength);
   segment[0] = 0xff;
   segment[1] = MARKER_APP2;
   writeUint16BE(segment, 2, length);
@@ -269,7 +288,7 @@ export function assembleUltraHdrJpeg(baseJpeg: Uint8Array, gainMapJpeg: Uint8Arr
   const primaryInsertOffset = findInsertionOffset(baseJpeg);
 
   // MPF セグメントは内容のバイト長が値に依存せず固定なので、値が決まる前に長さだけ先に確定できる
-  const mpfSegmentLength = buildApp2MpfSegment({ primarySize: 0, gainMapSize: 0, gainMapDataOffset: 0 }).length;
+  const mpfSegmentLength = mpfSegmentByteLength();
   const tiffStart = primaryInsertOffset + primaryXmpSegment.length + 4 + 4; // マーカー+長さ(4) + "MPF\0"(4)
   const primaryTotalLength = baseJpeg.length + primaryXmpSegment.length + mpfSegmentLength;
   const gainMapDataOffset = primaryTotalLength - tiffStart;

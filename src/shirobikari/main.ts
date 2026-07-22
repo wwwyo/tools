@@ -1,9 +1,9 @@
 /// <reference types="vite/client" />
 import "../global.css";
 import "./styles.css";
-import { loadSdrImageData, encodeGainMapAssets } from "./convert";
+import { loadSdrImageData, computeLumaMap, encodeBaseJpeg, encodeGainMapJpeg, type LumaMap } from "./convert";
 import { assembleUltraHdrJpeg } from "./ultrahdr";
-import { demosSectionHtml, initDemos } from "./demos";
+import { demosSectionHtml, initDemos, renderSupportList, supportsDrl, detectHdrDisplay } from "./demos";
 
 const appEl = document.getElementById("app");
 if (!appEl) {
@@ -110,28 +110,10 @@ const convertingStatusEl = document.getElementById("converting-status") as HTMLP
 const downloadButtonEl = document.getElementById("download-button") as HTMLButtonElement;
 const explainerEl = document.getElementById("explainer") as HTMLDetailsElement;
 
-type SupportItem = { label: string; ok: boolean; detail?: string };
-
-function renderSupportList(items: SupportItem[]): void {
-  supportListEl.innerHTML = items
-    .map(
-      (item) => `
-        <li class="flex items-start gap-2">
-          <span class="mt-0.5">${item.ok ? "✅" : "⚠️"}</span>
-          <span>
-            <span class="text-foreground">${item.label}</span>
-            ${item.detail ? `<span class="block text-xs text-muted-foreground">${item.detail}</span>` : ""}
-          </span>
-        </li>
-      `,
-    )
-    .join("");
-}
-
 function checkSupport(): void {
-  const hdrDisplay = window.matchMedia("(dynamic-range: high)").matches;
-  const drlSupported = typeof CSS !== "undefined" && CSS.supports("dynamic-range-limit", "standard");
-  renderSupportList([
+  const hdrDisplay = detectHdrDisplay();
+  const drlSupported = supportsDrl();
+  renderSupportList(supportListEl, [
     {
       label: `HDR ディスプレイ: ${hdrDisplay ? "検出" : "非検出"}`,
       ok: hdrDisplay,
@@ -157,17 +139,23 @@ function clearError(): void {
 
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-/** 変換対象ファイル・キャッシュした ImageData・生成済み Blob URL をまとめて持つ状態 */
+/**
+ * 変換対象ファイル・キャッシュした輝度マップ/ベース JPEG・生成済み Blob URL をまとめて持つ状態。
+ * 輝度マップの計算とベース JPEG のエンコードはスライダーの params に依存しない重い処理なので、
+ * 画像ロード時に1回だけ行った結果をここにキャッシュし、スライダー変更のたびにはやり直さない。
+ */
 type ConversionState = {
   file: File | null;
-  imageData: ImageData | null;
+  lumaMap: LumaMap | null;
+  baseJpeg: Uint8Array | null;
   originalObjectUrl: string | null;
   convertedObjectUrl: string | null;
 };
 
 const state: ConversionState = {
   file: null,
-  imageData: null,
+  lumaMap: null,
+  baseJpeg: null,
   originalObjectUrl: null,
   convertedObjectUrl: null,
 };
@@ -196,7 +184,11 @@ async function handleFileSelected(file: File): Promise<void> {
   downloadButtonEl.disabled = true;
 
   try {
-    state.imageData = await loadSdrImageData(file);
+    const imageData = await loadSdrImageData(file);
+    // 輝度走査とベース JPEG エンコードはどちらも params に依存しない重い処理なので、
+    // 画像ロード時に1回だけ実行して state にキャッシュし、スライダー変更では使い回す
+    state.lumaMap = computeLumaMap(imageData);
+    state.baseJpeg = await encodeBaseJpeg(imageData);
     await runConversion();
   } catch (error) {
     console.error(error);
@@ -204,22 +196,20 @@ async function handleFileSelected(file: File): Promise<void> {
   }
 }
 
-let conversionSeq = 0;
-
-async function runConversion(): Promise<void> {
-  if (!state.imageData) return;
-  const seq = ++conversionSeq;
+/**
+ * 実際の変換処理本体。呼び出し元の runConversion が in-flight を直列化しているため、
+ * ここは常に高々1つしか同時実行されない前提でよい。
+ */
+async function runConversionOnce(): Promise<void> {
+  if (!state.lumaMap || !state.baseJpeg) return;
   convertingStatusEl.classList.remove("hidden");
   downloadButtonEl.disabled = true;
 
   try {
     const stops = Number.parseFloat(headroomInputEl.value);
     const curve = Number.parseFloat(curveInputEl.value);
-    const { baseJpeg, gainMapJpeg, maxGainLog2 } = await encodeGainMapAssets(state.imageData, { stops, curve });
-    const bytes = assembleUltraHdrJpeg(baseJpeg, gainMapJpeg, { maxGainLog2 });
-
-    // debounce 中に新しい変換がスケジュールされていたら、古い結果の反映は捨てる
-    if (seq !== conversionSeq) return;
+    const { gainMapJpeg, maxGainLog2 } = await encodeGainMapJpeg(state.lumaMap, { stops, curve });
+    const bytes = assembleUltraHdrJpeg(state.baseJpeg, gainMapJpeg, { maxGainLog2 });
 
     revokeIfSet(state.convertedObjectUrl);
     const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "image/jpeg" });
@@ -229,13 +219,34 @@ async function runConversion(): Promise<void> {
     downloadButtonEl.disabled = false;
   } catch (error) {
     console.error(error);
-    if (seq === conversionSeq) {
-      showError("HDR への変換に失敗しました。別の画像やパラメータで試してください。");
-    }
+    showError("HDR への変換に失敗しました。別の画像やパラメータで試してください。");
   } finally {
-    if (seq === conversionSeq) {
-      convertingStatusEl.classList.add("hidden");
-    }
+    convertingStatusEl.classList.add("hidden");
+  }
+}
+
+let conversionRunning = false;
+let rerunRequested = false;
+
+/**
+ * 変換の in-flight を直列化する。debounce は「開始」を間引くだけなので、前回の変換が
+ * 実行中のまま次の呼び出しが来ることがある（重い処理なので普通に起こりうる）。
+ * 実行中なら rerunRequested を立てて即座に返し、実行中の変換が終わった直後に
+ * （そのときの最新パラメータで）もう一度だけ実行する。
+ */
+async function runConversion(): Promise<void> {
+  if (conversionRunning) {
+    rerunRequested = true;
+    return;
+  }
+  conversionRunning = true;
+  try {
+    do {
+      rerunRequested = false;
+      await runConversionOnce();
+    } while (rerunRequested);
+  } finally {
+    conversionRunning = false;
   }
 }
 

@@ -177,9 +177,13 @@ export function demosSectionHtml(): string {
   `;
 }
 
-type SupportItem = { label: string; ok: boolean; detail?: string };
+export type SupportItem = { label: string; ok: boolean; detail?: string };
 
-function renderSupportList(el: HTMLUListElement, items: SupportItem[]): void {
+/**
+ * サポート状況の <li> リストを描画する。本体（main.ts）とデモ（このファイル）の
+ * 両方でテンプレートが一字一句同じだったため、こちらを export して共有する。
+ */
+export function renderSupportList(el: HTMLUListElement, items: SupportItem[]): void {
   el.innerHTML = items
     .map(
       (item) => `
@@ -198,6 +202,22 @@ function renderSupportList(el: HTMLUListElement, items: SupportItem[]): void {
 function showUnsupportedMessage(el: HTMLElement, message: string): void {
   el.textContent = message;
   el.classList.remove("hidden");
+}
+
+/**
+ * CSS dynamic-range-limit プロパティのサポート判定。
+ * 本体（main.ts）とデモの両方でサポート状況表示に使うため export する。
+ */
+export function supportsDrl(): boolean {
+  return typeof CSS !== "undefined" && CSS.supports("dynamic-range-limit", "standard");
+}
+
+/**
+ * HDR ディスプレイの検出。
+ * 本体（main.ts）とデモの両方でサポート状況表示に使うため export する。
+ */
+export function detectHdrDisplay(): boolean {
+  return window.matchMedia("(dynamic-range: high)").matches;
 }
 
 /** SDR の基準白の輝度。Rec.709 / sRGB のスタジオ基準値 */
@@ -600,7 +620,7 @@ const colors: Record<string, readonly [number, number, number]> = {
 };
 
 function checkDrlSupport(drlUnsupportedEl: HTMLDivElement): void {
-  if (typeof CSS === "undefined" || !CSS.supports("dynamic-range-limit", "standard")) {
+  if (!supportsDrl()) {
     showUnsupportedMessage(
       drlUnsupportedEl,
       "このブラウザは dynamic-range-limit に対応していません。画像は常に標準の明るさで表示されます。",
@@ -619,7 +639,7 @@ async function initWebGpuDemos(): Promise<void> {
 
   const items: SupportItem[] = [];
 
-  const hdrDisplay = window.matchMedia("(dynamic-range: high)").matches;
+  const hdrDisplay = detectHdrDisplay();
   items.push({
     label: `HDR ディスプレイ: ${hdrDisplay ? "検出" : "非検出"}`,
     ok: hdrDisplay,
