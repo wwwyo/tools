@@ -3,6 +3,7 @@ import "../global.css";
 import "./styles.css";
 import { loadSdrImageData, computeLumaMap, encodeBaseJpeg, encodeGainMapJpeg, type LumaMap } from "./convert";
 import { assembleUltraHdrJpeg } from "./ultrahdr";
+import { encodePqJpeg } from "./pqjpeg";
 import { demosSectionHtml, initDemos, renderSupportList, supportsDrl, detectHdrDisplay } from "./demos";
 
 const appEl = document.getElementById("app");
@@ -16,7 +17,7 @@ appEl.innerHTML = `
       <h1 class="hdr-white-text text-2xl font-bold">シロビカリ</h1>
       <p class="text-sm text-muted-foreground">
         画像をめっちゃ光らせる変換をします。HDR 対応のディスプレイでは、通常の「白」より
-        明るく光る写真（UltraHDR JPEG）になります。HDR 非対応の環境では普通の JPEG として
+        明るく光る写真（PQ JPEG / UltraHDR JPEG）になります。HDR 非対応の環境では普通の JPEG として
         表示されます。
       </p>
     </header>
@@ -75,13 +76,23 @@ appEl.innerHTML = `
         </figure>
       </div>
       <p id="converting-status" class="hidden text-xs text-muted-foreground">変換中…</p>
-      <div class="flex justify-end">
+      <p class="text-xs text-muted-foreground">
+        PQ JPEG = X などの SNS 投稿向け。
+        UltraHDR JPEG = 非対応環境で普通の JPEG に見える共有向け。
+      </p>
+      <div class="flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          id="download-ultrahdr-button"
+          disabled
+          class="cursor-pointer border border-border px-3 py-1.5 text-sm text-muted-foreground transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring"
+        >ダウンロード (UltraHDR)</button>
         <button
           type="button"
           id="download-button"
           disabled
           class="hdr-white-text hdr-white-border cursor-pointer border px-3 py-1.5 text-sm transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring"
-        >ダウンロード</button>
+        >ダウンロード (PQ)</button>
       </div>
     </section>
 
@@ -108,6 +119,7 @@ const originalPreviewEl = document.getElementById("original-preview") as HTMLIma
 const convertedPreviewEl = document.getElementById("converted-preview") as HTMLImageElement;
 const convertingStatusEl = document.getElementById("converting-status") as HTMLParagraphElement;
 const downloadButtonEl = document.getElementById("download-button") as HTMLButtonElement;
+const downloadUltraHdrButtonEl = document.getElementById("download-ultrahdr-button") as HTMLButtonElement;
 const explainerEl = document.getElementById("explainer") as HTMLDetailsElement;
 
 function checkSupport(): void {
@@ -140,12 +152,14 @@ function clearError(): void {
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 /**
- * 変換対象ファイル・キャッシュした輝度マップ/ベース JPEG・生成済み Blob URL をまとめて持つ状態。
- * 輝度マップの計算とベース JPEG のエンコードはスライダーの params に依存しない重い処理なので、
- * 画像ロード時に1回だけ行った結果をここにキャッシュし、スライダー変更のたびにはやり直さない。
+ * 変換対象ファイル・キャッシュした ImageData/輝度マップ/ベース JPEG・生成済み Blob URL を
+ * まとめて持つ状態。ImageData は PQ 再変換に、輝度マップ/ベース JPEG は UltraHDR の
+ * その場組み立てに必要で、いずれもスライダーの params に依存しない重い処理の結果なので
+ * 画像ロード時に1回だけ計算してキャッシュし、スライダー変更のたびにはやり直さない。
  */
 type ConversionState = {
   file: File | null;
+  imageData: ImageData | null;
   lumaMap: LumaMap | null;
   baseJpeg: Uint8Array | null;
   originalObjectUrl: string | null;
@@ -154,6 +168,7 @@ type ConversionState = {
 
 const state: ConversionState = {
   file: null,
+  imageData: null,
   lumaMap: null,
   baseJpeg: null,
   originalObjectUrl: null,
@@ -177,6 +192,7 @@ async function handleFileSelected(file: File): Promise<void> {
   revokeIfSet(state.convertedObjectUrl);
   state.convertedObjectUrl = null;
   convertedPreviewEl.removeAttribute("src");
+  state.imageData = null;
   state.lumaMap = null;
   state.baseJpeg = null;
   const objectUrl = URL.createObjectURL(file);
@@ -189,11 +205,14 @@ async function handleFileSelected(file: File): Promise<void> {
   previewSectionEl.classList.remove("hidden");
   previewSectionEl.classList.add("flex");
   downloadButtonEl.disabled = true;
+  downloadUltraHdrButtonEl.disabled = true;
 
   try {
     const imageData = await loadSdrImageData(file);
-    // 輝度走査とベース JPEG エンコードはどちらも params に依存しない重い処理なので、
-    // 画像ロード時に1回だけ実行して state にキャッシュし、スライダー変更では使い回す
+    // 輝度走査・ベース JPEG エンコードはどちらも params に依存しない重い処理なので、
+    // 画像ロード時に1回だけ実行して state にキャッシュし、スライダー変更では使い回す。
+    // ImageData 自体も PQ 再変換（画素ごとの符号化）に毎回必要なのでキャッシュする
+    state.imageData = imageData;
     state.lumaMap = computeLumaMap(imageData);
     state.baseJpeg = await encodeBaseJpeg(imageData);
     await runConversion();
@@ -206,17 +225,18 @@ async function handleFileSelected(file: File): Promise<void> {
 /**
  * 実際の変換処理本体。呼び出し元の runConversion が in-flight を直列化しているため、
  * ここは常に高々1つしか同時実行されない前提でよい。
+ * プレビュー・デフォルトダウンロードは PQ JPEG（画素+ICC が本体なので再エンコードに強い）。
+ * UltraHDR はここでは生成せず、副ボタン押下時にその場で組み立てる（キャッシュ不要）。
  */
 async function runConversionOnce(): Promise<void> {
-  if (!state.lumaMap || !state.baseJpeg) return;
+  if (!state.imageData) return;
   convertingStatusEl.classList.remove("hidden");
   downloadButtonEl.disabled = true;
 
   try {
     const stops = Number.parseFloat(headroomInputEl.value);
     const curve = Number.parseFloat(curveInputEl.value);
-    const { gainMapJpeg, maxGainLog2 } = await encodeGainMapJpeg(state.lumaMap, { stops, curve });
-    const bytes = assembleUltraHdrJpeg(state.baseJpeg, gainMapJpeg, { maxGainLog2 });
+    const bytes = await encodePqJpeg(state.imageData, { stops, curve });
 
     revokeIfSet(state.convertedObjectUrl);
     const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "image/jpeg" });
@@ -224,6 +244,7 @@ async function runConversionOnce(): Promise<void> {
     state.convertedObjectUrl = url;
     convertedPreviewEl.src = url;
     downloadButtonEl.disabled = false;
+    downloadUltraHdrButtonEl.disabled = false;
   } catch (error) {
     console.error(error);
     showError("HDR への変換に失敗しました。別の画像やパラメータで試してください。");
@@ -327,6 +348,37 @@ downloadButtonEl.addEventListener("click", () => {
   anchor.href = state.convertedObjectUrl;
   anchor.download = `${baseName}-hdr.jpg`;
   anchor.click();
+});
+
+/**
+ * UltraHDR は副形式なのでキャッシュを持たず、クリック時に現在のスライダー値で
+ * その場組み立てる（PQ のようにプレビュー・state キャッシュとは連動させない）。
+ */
+downloadUltraHdrButtonEl.addEventListener("click", () => {
+  if (!state.lumaMap || !state.baseJpeg || !state.file) return;
+  const baseName = state.file.name.replace(/\.[^.]+$/, "");
+  const lumaMap = state.lumaMap;
+  const baseJpeg = state.baseJpeg;
+
+  (async () => {
+    const stops = Number.parseFloat(headroomInputEl.value);
+    const curve = Number.parseFloat(curveInputEl.value);
+    const { gainMapJpeg, maxGainLog2 } = await encodeGainMapJpeg(lumaMap, { stops, curve });
+    const bytes = assembleUltraHdrJpeg(baseJpeg, gainMapJpeg, { maxGainLog2 });
+    const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "image/jpeg" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${baseName}-ultrahdr.jpg`;
+      anchor.click();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  })().catch((error: unknown) => {
+    console.error(error);
+    showError("UltraHDR への変換に失敗しました。別の画像やパラメータで試してください。");
+  });
 });
 
 // WebGPU 初期化はコストがあるため、disclosure を実際に開くまで遅延させる

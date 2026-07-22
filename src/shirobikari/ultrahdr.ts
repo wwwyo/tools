@@ -36,7 +36,7 @@ function readUint16BE(bytes: Uint8Array, offset: number): number {
   return (high << 8) | low;
 }
 
-function writeUint16BE(out: Uint8Array, offset: number, value: number): void {
+export function writeUint16BE(out: Uint8Array, offset: number, value: number): void {
   out[offset] = (value >> 8) & 0xff;
   out[offset + 1] = value & 0xff;
 }
@@ -48,7 +48,7 @@ function writeUint32BE(out: Uint8Array, offset: number, value: number): void {
   out[offset + 3] = value & 0xff;
 }
 
-function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
   const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const out = new Uint8Array(total);
   let pos = 0;
@@ -63,7 +63,7 @@ function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
  * 新規セグメントを挿入すべきオフセットを返す。SOI の直後、ただし JFIF (APP0) が
  * あればその後ろにする（APP0 が先頭に無いと弾くデコーダがあるため）。
  */
-function findInsertionOffset(jpeg: Uint8Array): number {
+export function findInsertionOffset(jpeg: Uint8Array): number {
   assertJpegSoi(jpeg);
   let offset = 2;
   if (jpeg[offset] === 0xff && jpeg[offset + 1] === MARKER_APP0) {
@@ -80,7 +80,7 @@ function findInsertionOffset(jpeg: Uint8Array): number {
 }
 
 /** 指定オフセットにセグメント列を挿入した新しいバイト列を返す */
-function insertSegments(jpeg: Uint8Array, offset: number, segments: readonly Uint8Array[]): Uint8Array {
+export function insertSegments(jpeg: Uint8Array, offset: number, segments: readonly Uint8Array[]): Uint8Array {
   return concatBytes([jpeg.subarray(0, offset), ...segments, jpeg.subarray(offset)]);
 }
 

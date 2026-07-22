@@ -12,9 +12,9 @@ const MAX_LONG_EDGE = 4096;
 const GAIN_MAP_DOWNSCALE = 4;
 
 /** Rec.709 の輝度係数（線形光空間で適用する） */
-const LUMA_R = 0.2126;
-const LUMA_G = 0.7152;
-const LUMA_B = 0.0722;
+export const LUMA_R = 0.2126;
+export const LUMA_G = 0.7152;
+export const LUMA_B = 0.0722;
 
 export type GainMapParams = {
   /** ヘッドルーム（最大ゲイン、stop 単位）。1〜4 stop を想定。有限かつ 0 より大きい必要がある */
@@ -73,7 +73,7 @@ export async function loadSdrImageData(file: File): Promise<ImageData> {
  * sRGB の 8bit チャンネル値 (0-255) を線形光 (0-1) に変換する事前計算 LUT。
  * 全画素で同じ 256 パターンしか出ないため、都度計算せずここで一度だけ埋める。
  */
-const SRGB_TO_LINEAR_LUT: Float32Array = (() => {
+export const SRGB_TO_LINEAR_LUT: Float32Array = (() => {
   const lut = new Float32Array(256);
   for (let value8bit = 0; value8bit < 256; value8bit++) {
     const c = value8bit / 255;
@@ -101,7 +101,7 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
  * ちゃんと持ち上がる（smoothstep だけで判定すると curve=0 でも暗部がほぼ持ち上がらず
  * ラベルと矛盾していたため、一様加算項 (1-curve) を足す形に変更した）。
  */
-function gainAt(linearLuma: number, maxGain: number, threshold: number, curve: number): number {
+export function gainAt(linearLuma: number, maxGain: number, threshold: number, curve: number): number {
   const highlightWeight = (1 - curve) + curve * smoothstep(threshold, 1, linearLuma);
   return 1 + (maxGain - 1) * highlightWeight;
 }
