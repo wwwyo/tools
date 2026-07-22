@@ -62,11 +62,18 @@
    * SDR 環境では普通の白として見えるので、そのままフォールバックになる。
    */
   .hdr-white-text {
-    background-image: url("./hdr.png");
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
     dynamic-range-limit: no-limit;
+  }
+
+  /* background-clip: text 未対応の環境で color: transparent だけが効いて文字が消えないよう、
+     クリップと透明化は必ずセットで適用する */
+  @supports ((background-clip: text) or (-webkit-background-clip: text)) {
+    .hdr-white-text {
+      background-image: url("./hdr.png");
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
   }
 
   /* border-image には border-radius が効かないため、角は直角になる（ブランド表現として許容） */

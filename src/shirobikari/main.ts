@@ -172,6 +172,13 @@ async function handleFileSelected(file: File): Promise<void> {
   clearError();
 
   revokeIfSet(state.originalObjectUrl);
+  // 前の画像の変換結果とキャッシュも破棄する。読み込みに失敗したとき、新しい元画像の隣に
+  // 前の画像の変換後プレビューが残る不整合と Blob URL リークを防ぐ
+  revokeIfSet(state.convertedObjectUrl);
+  state.convertedObjectUrl = null;
+  convertedPreviewEl.removeAttribute("src");
+  state.lumaMap = null;
+  state.baseJpeg = null;
   const objectUrl = URL.createObjectURL(file);
   state.file = file;
   state.originalObjectUrl = objectUrl;
