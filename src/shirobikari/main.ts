@@ -4,7 +4,7 @@ import "./styles.css";
 import { loadSdrImageData, computeLumaMap, encodeBaseJpeg, encodeGainMapJpeg, type LumaMap } from "./convert";
 import { assembleUltraHdrJpeg } from "./ultrahdr";
 import { encodePqJpeg } from "./pqjpeg";
-import { demosSectionHtml, initDemos, renderSupportList, supportsDrl, detectHdrDisplay } from "./demos";
+import { renderSupportList, supportsDrl, detectHdrDisplay } from "./support";
 
 const appEl = document.getElementById("app");
 if (!appEl) {
@@ -92,12 +92,11 @@ appEl.innerHTML = `
       </div>
     </section>
 
-    <details id="explainer" class="flex flex-col gap-3 rounded border border-border px-4 py-3">
-      <summary class="cursor-pointer text-sm font-bold text-muted-foreground">HDR が明るく見える仕組み</summary>
-      <div class="flex flex-col gap-8 pt-2">
-        ${demosSectionHtml()}
-      </div>
-    </details>
+    <p class="text-sm text-muted-foreground">
+      HDR が明るく見える仕組みの解説は
+      <a href="https://wwwyo.dev/blog/why-hdr-looks-brighter/" class="underline underline-offset-2 hover:text-foreground">blog 記事</a>
+      へ移しました。
+    </p>
   </main>
 `;
 
@@ -116,7 +115,6 @@ const convertedPreviewEl = document.getElementById("converted-preview") as HTMLI
 const convertingStatusEl = document.getElementById("converting-status") as HTMLParagraphElement;
 const downloadButtonEl = document.getElementById("download-button") as HTMLButtonElement;
 const downloadUltraHdrButtonEl = document.getElementById("download-ultrahdr-button") as HTMLButtonElement;
-const explainerEl = document.getElementById("explainer") as HTMLDetailsElement;
 
 function checkSupport(): void {
   const hdrDisplay = detectHdrDisplay();
@@ -375,13 +373,6 @@ downloadUltraHdrButtonEl.addEventListener("click", () => {
     console.error(error);
     showError("UltraHDR への変換に失敗しました。別の画像やパラメータで試してください。");
   });
-});
-
-// WebGPU 初期化はコストがあるため、disclosure を実際に開くまで遅延させる
-explainerEl.addEventListener("toggle", () => {
-  if (explainerEl.open) {
-    initDemos();
-  }
 });
 
 checkSupport();

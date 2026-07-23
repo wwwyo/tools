@@ -14,7 +14,8 @@
 - プレビューと「ダウンロード（PQ）」ボタンは PQ JPEG。「UltraHDR でダウンロード」ボタンは副形式で、クリック時にその場で組み立てる
 - プレビューは元画像（`dynamic-range-limit: standard` 固定）と変換後（`no-limit`）の並置
 - 変換はすべてページ内 JS で完結し、画像は外部に送信しない
-- ページ末尾の disclosure「HDR が明るく見える仕組み」に、CSS / HDR 画像 / WebGPU で輝度差を見比べる解説デモがある（WebGPU は初回 open 時に遅延初期化）
+- 「HDR が明るく見える仕組み」の解説（CSS / HDR 画像 / WebGPU で輝度差を見比べるデモ）は
+  [blog 記事](https://wwwyo.dev/blog/why-hdr-looks-brighter/)へ移設した。ページ末尾には移設先へのリンクのみ置く
 
 ## PQ JPEG とは（pqjpeg.ts）
 
@@ -36,7 +37,7 @@ ICC プロファイルは `p3pq-icc.ts` の `buildP3PqIccProfile()` で実行時
 
 ### MPF オフセットの罠
 
-MPF の Individual Image Offset の基点は**ファイル先頭ではなく MP Endian フィールド（TIFF ヘッダ先頭）**（CIPA DC-007）。mdn/shared-assets の ultra-hdr.jpg（同梱）を再パースすると確認できる。XMP の `Item:Length` と MPF の size/offset は「メタデータ挿入後の最終バイト長」を指す必要があるため、ゲインマップ側を先に確定させてからベース側のメタデータを組む。
+MPF の Individual Image Offset の基点は**ファイル先頭ではなく MP Endian フィールド（TIFF ヘッダ先頭）**（CIPA DC-007）。mdn/shared-assets の ultra-hdr.jpg を再パースすると確認できる。XMP の `Item:Length` と MPF の size/offset は「メタデータ挿入後の最終バイト長」を指す必要があるため、ゲインマップ側を先に確定させてからベース側のメタデータを組む。
 
 ## HDR の白（ブランドアクセント）
 
@@ -55,7 +56,6 @@ shirobikari/
 ├── pqjpeg.ts      PQ JPEG 生成（画素の PQ 符号化 + ICC プロファイル埋め込み）。デフォルト出力
 ├── p3pq-icc.ts    P3 PQ の ICC v4 プロファイル生成（matrix/TRC + cicp、clean-room）。pqjpeg.ts が使う
 ├── ultrahdr.ts    UltraHDR JPEG コンテナ組み立て（XMP / MPF のバイナリ生成）。副形式
-├── demos.ts       解説デモ（dynamic-range-limit / HDR PNG / WebGPU）
-├── hdr.png        HDR の白一色 PNG（解説デモ + ブランドアクセント用。PQ JPEG の ICC はもう抽出しない）
-└── ultra-hdr.jpg  UltraHDR サンプル（mdn/shared-assets 由来。解説デモに使用）
+├── support.ts     サポート状況表示の共有ロジック（HDR ディスプレイ検出 / dynamic-range-limit 対応判定）
+└── hdr.png        HDR の白一色 PNG（ブランドアクセント用。PQ JPEG の ICC はもう抽出しない）
 ```
