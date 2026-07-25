@@ -1,3 +1,10 @@
+/*
+ * ビルド後の HTML ではツール CSS が global.css より先に読まれる。layer の順序は
+ * 最初の宣言で決まるため、これが無いと components が theme/base より下に落ち、
+ * Tailwind preflight の `border: 0 solid` に負けて枠線が消える（dev では再現しない）
+ */
+@layer theme, base, components, utilities;
+
 /* hisoka の赤リングから抽出したパレット。
    #9E9AB7 は #FAF9FB 上でコントラスト比 2.6:1 と AA を下回るため
    本文系には使わず、border と muted の面にだけ回している */

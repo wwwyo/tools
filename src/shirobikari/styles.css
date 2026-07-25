@@ -1,4 +1,10 @@
 /*
+ * ビルド後の HTML ではツール CSS が global.css より先に読まれる。layer の順序は
+ * 最初の宣言で決まるため、これが無いと components が theme/base より下に落ちる
+ */
+@layer theme, base, components, utilities;
+
+/*
  * HDR の輝きを比較するツールなので、明るい要素が沈まないよう画面全体を暗系にする
  * shadcn の標準 dark テーマ値をそのまま :root に流用（独自カラートークンは足していない）
  */
