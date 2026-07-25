@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 掲載日 (toolPublishedAt) / sitemap の lastmod を git log から引くため、
+          # shallow clone だと全ツールがデプロイ日で上書きされてしまう
+          fetch-depth: 0
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
       - run: bun install --frozen-lockfile
       - run: bun run deploy

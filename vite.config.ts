@@ -312,6 +312,44 @@ function ogPlugin(): Plugin {
   };
 }
 
+// 更新日は `git log -1 --format=%as -- <path>` の最終コミット日。取れなければ undefined を
+// 返し、呼び出し側で <lastmod> 自体を省く（toolPublishedAt() と同じ理由で、今日の日付に
+// フォールバックすると commit 前後で出力が変わってしまうため）
+function lastCommitDate(path?: string): string | undefined {
+  const out = execSync(`git log -1 --format=%as${path ? ` -- ${path}` : ''}`, {
+    cwd: __dirname,
+    encoding: 'utf-8',
+  }).trim();
+  return out || undefined;
+}
+
+// sitemap.xml を build 時にのみ生成する（dev はクローラ向け静的成果物が不要なため未対応）
+function sitemapPlugin(): Plugin {
+  return {
+    name: 'sitemap',
+    generateBundle() {
+      const urls = [
+        { loc: `${SITE_URL}/`, lastmod: lastCommitDate() },
+        ...discoverTools().map((tool) => ({
+          loc: `${SITE_URL}/${tool.dir}/`,
+          lastmod: lastCommitDate(`src/${tool.dir}`),
+        })),
+      ];
+      const body = urls
+        .map(
+          ({ loc, lastmod }) =>
+            `  <url>\n    <loc>${loc}</loc>${lastmod ? `\n    <lastmod>${lastmod}</lastmod>` : ''}\n  </url>`,
+        )
+        .join('\n');
+      this.emitFile({
+        type: 'asset',
+        fileName: 'sitemap.xml',
+        source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   root: 'src',
   server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
@@ -320,6 +358,7 @@ export default defineConfig({
     headerPlugin(),
     toolListPlugin(),
     ogPlugin(),
+    sitemapPlugin(),
     react(),
     tailwindcss(),
   ],
