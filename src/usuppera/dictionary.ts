@@ -11,7 +11,15 @@
 // - https://github.com/mrtomdev/truthlens
 // ------------------------------------------------------------------
 
-export type Category = "kigo" | "hype" | "teikei" | "template" | "kotonakare" | "jouchou" | "setsuzoku";
+export type Category =
+  | "kigo"
+  | "hype"
+  | "teikei"
+  | "template"
+  | "kotonakare"
+  | "jouchou"
+  | "setsuzoku"
+  | "eigo";
 
 export interface DictionaryEntry {
   category: Category;
@@ -19,6 +27,8 @@ export interface DictionaryEntry {
   pattern: string | RegExp;
   weight: number;
   label?: string;
+  /** マッチ文字列（小文字化して比較）がここに含まれるときは検知しない */
+  allowlist?: ReadonlySet<string>;
 }
 
 export interface Match {
@@ -62,6 +72,32 @@ const TEMPLATE_LABEL = "テンプレ導入・結び";
 const KOTONAKARE_LABEL = "事なかれ・両論併記";
 const JOUCHOU_LABEL = "冗長・機械的構文";
 const SETSUZOKU_LABEL = "接続詞の連打";
+const EIGO_LABEL = "急な英語";
+
+// 「急な英語」から外す語。日本語話者が技術・開発の文脈で普段そのまま打つ語は、
+// 気取って英語にしたのではなく単にそれが名前なので拾わない。
+// 逆に robust / seamless / alignment のような抽象評価語は入れない。日本語で書けるのに
+// 英語のまま置かれる語こそが検知対象なので、ここを広げすぎると層ごと死ぬ。
+// 3文字未満（id, db, ui, ci）はパターン側で既に落ちているため列挙しない。
+const EIGO_ALLOWLIST: ReadonlySet<string> = new Set([
+  // 言語・ランタイム・ツール（小文字で書かれることがあるもの）
+  "typescript", "javascript", "python", "ruby", "rust", "golang", "java", "kotlin", "swift", "php",
+  "react", "vue", "svelte", "angular", "next", "nuxt", "vite", "webpack", "eslint", "prettier", "biome",
+  "node", "deno", "bun", "npm", "yarn", "pnpm", "git", "github", "docker", "kubernetes", "nginx",
+  "redis", "postgres", "mysql", "sqlite", "graphql", "linux", "ubuntu", "macos", "windows", "android",
+  "aws", "gcp", "azure", "vercel", "netlify", "cloudflare", "firebase", "supabase",
+  // 開発ワークフロー
+  "issue", "closed", "open", "merge", "merged", "commit", "branch", "rebase", "push", "pull", "fork",
+  "clone", "diff", "patch", "review", "approve", "deploy", "build", "test", "lint", "format", "release",
+  "bug", "fix", "revert", "draft", "repo", "repository", "milestone", "label", "assign",
+  // 一般技術語
+  "api", "sdk", "cli", "url", "uri", "http", "https", "json", "yaml", "toml", "csv", "html", "css",
+  "sql", "regex", "log", "debug", "trace", "cache", "config", "env", "server", "client", "request",
+  "response", "session", "token", "cookie", "endpoint", "schema", "query", "index", "hook", "props",
+  "state", "component", "module", "package", "library", "framework", "runtime", "script", "style",
+  "layout", "font", "dist", "src", "path", "port", "host", "proxy", "queue", "worker", "thread",
+  "buffer", "stream", "batch", "job", "task", "cron", "webhook", "payload", "header", "body", "status",
+]);
 
 export const DICTIONARY: DictionaryEntry[] = [
   // 1. 記号・書式層
@@ -90,6 +126,15 @@ export const DICTIONARY: DictionaryEntry[] = [
     pattern: /(^|\n)[^\S\n]*(?:[-・*][^\S\n]*)?(?![©®™])\p{Extended_Pictographic}/gu,
     weight: 10,
     label: "絵文字プレフィックス",
+  },
+  {
+    category: "kigo",
+    categoryLabel: KIGO_LABEL,
+    // 英語圏の参照・箇条書き記号。日本語入力から打つ手間に見合う場面がまずないので高 weight。
+    // 脚注の † ‡ は学術文書で人間も使うため入れない
+    pattern: /[§¶•]/g,
+    weight: 9,
+    label: "英語圏の記号（§ ¶ •）",
   },
   { category: "kigo", categoryLabel: KIGO_LABEL, pattern: /：[ \t]/g, weight: 6, label: "全角コロン+半角スペース" },
   {
@@ -214,6 +259,22 @@ export const DICTIONARY: DictionaryEntry[] = [
   { category: "setsuzoku", categoryLabel: SETSUZOKU_LABEL, pattern: /(^|\n)したがって、/g, weight: 2 },
   { category: "setsuzoku", categoryLabel: SETSUZOKU_LABEL, pattern: /(^|\n)つまり、/g, weight: 1 },
   { category: "setsuzoku", categoryLabel: SETSUZOKU_LABEL, pattern: /(^|\n)とりわけ、/g, weight: 2 },
+
+  // 2-7. eigo（日本語の地の文に急に混ざる英単語）
+  {
+    category: "eigo",
+    categoryLabel: EIGO_LABEL,
+    // 日本語に前後を挟まれた小文字ラテン語 1 語だけを拾う。
+    // - 大文字始まり・全大文字を外すのは固有名詞と略語（React / API / AI）を通すため
+    // - 2文字語（go, ok）を外すのは日本語の中に紛れる短語の偽陽性が多いため
+    // - 単語を並べた英語（deep dive / npm install）は語の隣が日本語にならないため丸ごと外れる。
+    //   狙いは「日本語の中で 1 語だけ英語にする」癖で、英語のまま書かれた句や引用は対象外
+    pattern:
+      /(?<=[\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Han}ー、。！？「」][ \t]?)[a-z][a-z'-]{2,}(?=[ \t]?[\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Han}ー、。！？「」])/gu,
+    // 技術文書では素の英単語が普通に出るため、1 件では効かず連発で効く弱い weight にする
+    weight: 3,
+    allowlist: EIGO_ALLOWLIST,
+  },
 ];
 
 export const CATEGORY_ORDER: Category[] = [
@@ -224,11 +285,12 @@ export const CATEGORY_ORDER: Category[] = [
   "kotonakare",
   "jouchou",
   "setsuzoku",
+  "eigo",
 ];
 
 export const SAMPLE_TEXT =
   "近年、AIの活用が注目を集めています——特にビジネスの現場で。本記事では、以下の3つの観点から解説していきます。\n\n" +
-  "**効率化:** 業務プロセスを最適化することができます。\n" +
+  "**効率化:** 業務プロセスを seamless に最適化することができます。\n" +
   "**創造性:** 新たなアイデアの可能性を解き放ちます。\n" +
   "**分析力:** データの本質を捉えて重要な示唆を与えます。\n\n" +
   "この結果は、AIが革命的なゲームチェンジャーであることを浮き彫りにしており、今後の展開が注目されます。" +
@@ -267,6 +329,8 @@ export function findMatches(text: string): { all: Match[]; nonOverlapping: Match
         regex.lastIndex++;
         continue;
       }
+      // マッチ長が 0 でない時点で lastIndex は前進しているため、ここは素通しでよい
+      if (entry.allowlist?.has(matchedStr.toLowerCase())) continue;
       matches.push({
         start: start,
         end: start + matchedStr.length,

@@ -1,6 +1,6 @@
 # tools
 
-ペラいち PoC 置き場。1 ツール = 1 ディレクトリで作り、即 deploy して即 post する。作り込むより出荷を優先する。
+ペラいち PoC 置き場。
 
 ## 設計原則
 
@@ -13,7 +13,6 @@
 - 外部 CDN / API に依存しない。決定論的なロジックはすべてページ内 JS で完結させる
 - ツール一覧は各ツールの `index.html` の `<title>` / `<meta name="description">` からビルド時に自動生成される（Vite はビルド時に `src/<appdir>/index.html` を自動検出し、`src/index.html` の一覧を手で足す必要はない）
 - OGP 画像も同じ `<title>` / `<meta name="description">` からビルド時に自動生成される。ツールを追加するときと `src/<appdir>/og.tsx`（OGP に載せる画面ミニチュア）を書くときは `.agents/skills/add-tool` を読む
-- 完成度より出荷速度。動いたら build して deploy して post する
 
 ## ディレクトリ構造
 
@@ -24,7 +23,11 @@ tools/
 │   ├── global.css       Tailwind v4 エントリ（@import "tailwindcss" + @theme トークン）
 │   └── <appdir>/        各ツール（1 ツール = 1 ディレクトリ）
 │       ├── index.html   エントリ
-│       └── *.tsx など   実装（vanilla JS または React）
+│       ├── *.tsx など   実装（vanilla JS または React）
+│       ├── og.tsx       OGP 画像に載せる画面ミニチュア
+│       ├── README.md    設計と判断の記録（人間向け）
+│       ├── AGENTS.md    このツールを触るときの編集ルール（任意）
+│       └── CLAUDE.md    `read @AGENTS.md` だけ書く（任意）
 ├── dist/            Vite build 出力（gitignore、デプロイ対象）
 ├── vite.config.ts   Vite 設定（src/<appdir>/index.html を自動検出）
 ├── tsconfig.json    TypeScript 設定（jsx: "react-jsx" 含む）
@@ -47,8 +50,6 @@ bun install    # wrangler をインストール
 ```bash
 bun install      # 依存インストール
 bun run dev      # ローカル開発サーバ（Vite dev）
-bun run build    # ビルド（Vite build → dist/）
-bun run deploy   # Cloudflare へデプロイ（build → wrangler deploy）
 ```
 
 ## 技術スタック
@@ -61,3 +62,4 @@ bun run deploy   # Cloudflare へデプロイ（build → wrangler deploy）
 - mise（ツール管理）
 
 - Vite 設定・ビルド時生成・TSX 動的読み込みの学びは `.agents/skills/coding/`（session-retro が維持）を参照
+
