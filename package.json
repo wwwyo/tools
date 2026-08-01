@@ -19,7 +19,7 @@
     "satori": "0.26.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.1.4",
+    "vite": "8.1.5",
     "wrangler": "4.114.0"
   },
   "dependencies": {
