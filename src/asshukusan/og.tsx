@@ -1,74 +1,37 @@
 // OGP カード用のミニチュア。satori (OGP) と通常の React 描画 (デモページ) の両方から
 // 使われるため inline style のみ・display は flex のみで組む（本体の main.ts は変更しない）。
 //
-// 工程や数値は載せず「大きな写真が小さくなる」絵だけで圧縮を表す。
-// 写真は sky / ground の 2 段グラデーションと太陽の丸で記号化する。
+// 写真の中身は描かず、フレームの輪郭だけを等比で縮めながら右へずらして重ね、
+// 「同じ画が絞られていく」残像として圧縮を表す。線は墨色 1px、最後の 1 枚だけ朱で塗る。
 
-type PhotoSize = { width: number; height: number; radius: number };
+const FRAME_COUNT = 5;
+const BASE_WIDTH = 336;
+const BASE_HEIGHT = 224;
+/** 1 枚ごとの縮小率。0.78^4 ≈ 0.37 で最後の枚が元の 1/3 強に収まる */
+const SHRINK = 0.78;
+/** 1 枚ごとに右へずらす量。最後の 1 枚が最外枠の内側（右端から 24px）に収まる値 */
+const SHIFT_X = 47;
 
-const BEFORE: PhotoSize = { width: 330, height: 220, radius: 10 };
-const AFTER: PhotoSize = { width: 132, height: 88, radius: 6 };
+type Frame = { width: number; height: number; left: number; opacity: number; filled: boolean };
 
-function Photo({ size }: { size: PhotoSize }) {
-  const sunSize = Math.round(size.height * 0.2);
-  return (
-    <div
-      style={{
-        display: 'flex',
-        position: 'relative',
-        width: size.width,
-        height: size.height,
-        borderRadius: size.radius,
-        border: '1px solid rgba(140,133,123,0.35)',
-        backgroundImage: 'linear-gradient(180deg, #cfe3f2 0%, #e9f1f7 62%, #8fae66 62%, #6d9150 100%)',
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          position: 'absolute',
-          top: Math.round(size.height * 0.16),
-          left: Math.round(size.width * 0.68),
-          width: sunSize,
-          height: sunSize,
-          borderRadius: sunSize,
-          backgroundColor: '#f6e7a8',
-        }}
-      />
-    </div>
-  );
-}
+const FRAMES: Frame[] = Array.from({ length: FRAME_COUNT }, (_, i) => {
+  const scale = SHRINK ** i;
+  return {
+    width: Math.round(BASE_WIDTH * scale),
+    height: Math.round(BASE_HEIGHT * scale),
+    left: i * SHIFT_X,
+    opacity: 0.9 - i * 0.14,
+    filled: i === FRAME_COUNT - 1,
+  };
+});
 
-// 矢印の字形は Sawarabi Gothic の japanese サブセットに無く、border の三角形も satori は
-// 矩形に描いてしまうため、線を太→細に段階で細らせて「絞られていく」向きを表す
-function Squeeze() {
-  const widths = [10, 7, 4];
-  return (
-    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', margin: '0 22px' }}>
-      {widths.map((w, i) => (
-        <div
-          key={w}
-          style={{
-            display: 'flex',
-            width: 22,
-            height: w,
-            borderRadius: w,
-            marginLeft: i === 0 ? 0 : 8,
-            backgroundColor: '#c73e2e',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
+const STAGE_WIDTH = FRAMES[FRAMES.length - 1]!.left + FRAMES[FRAMES.length - 1]!.width;
 
 export default function AsshukusanOgPreview() {
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         width: '100%',
@@ -78,9 +41,24 @@ export default function AsshukusanOgPreview() {
         padding: 40,
       }}
     >
-      <Photo size={BEFORE} />
-      <Squeeze />
-      <Photo size={AFTER} />
+      <div style={{ display: 'flex', position: 'relative', width: STAGE_WIDTH, height: BASE_HEIGHT }}>
+        {FRAMES.map((frame) => (
+          <div
+            key={frame.left}
+            style={{
+              display: 'flex',
+              position: 'absolute',
+              left: frame.left,
+              top: Math.round((BASE_HEIGHT - frame.height) / 2),
+              width: frame.width,
+              height: frame.height,
+              borderRadius: 3,
+              border: frame.filled ? '1px solid #c73e2e' : `1px solid rgba(31,27,22,${frame.opacity})`,
+              backgroundColor: frame.filled ? '#c73e2e' : 'rgba(251,250,246,0.72)',
+            }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
