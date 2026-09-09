@@ -3,6 +3,9 @@
  * 決定論的な処理は全てページ内 Canvas で完結し、画像を外部へは送らない。
  */
 
+import { buildExifApp1 } from "./exif";
+import { insertJpegSegments } from "./metadataStrip";
+
 /** このツールが梯子の行として並べる出力形式。品質パラメータの有無に関わらず、拡張子ごとに1行 */
 export type OutputFormat = "jpeg" | "webp" | "avif" | "png";
 
@@ -126,6 +129,10 @@ export async function encodeImage(
  * 動作確認用のサンプル画像（夕焼けの風景）をその場で生成する。
  * ノイズや雲の粒をランダム生成しているのは、実写に近い「グラデーションだけではない」データを
  * 圧縮させて縮小・品質ラダーの効果差が体感できるようにするため。
+ *
+ * canvas が吐く JPEG には Exif が一切無いため、メタデータカードの segment 一覧・Exif 詳細・
+ * 編集機能を実写を用意せず試せるように、生成後に buildExifApp1 + insertJpegSegments で
+ * 実データ（Make/Model/DateTimeOriginal/Orientation/GPS）入りの APP1 を差し込む。
  */
 export function generateSampleFile(): Promise<File> {
   return new Promise((resolve, reject) => {
@@ -203,12 +210,25 @@ export function generateSampleFile(): Promise<File> {
     }
     ctx.putImageData(imgData, 0, 0);
 
-    canvas.toBlob((blob) => {
+    canvas.toBlob(async (blob) => {
       if (!blob) {
         reject(new Error("サンプル画像の生成に失敗しました"));
         return;
       }
-      resolve(new File([blob], "sample-photo.jpg", { type: "image/jpeg", lastModified: Date.now() }));
+      try {
+        const exifApp1 = buildExifApp1({
+          make: "Keiryo",
+          model: "Sample",
+          dateTimeOriginal: "2026:09:09 12:00:00",
+          orientation: 1,
+          lat: 35.6812,
+          lon: 139.7671,
+        });
+        const withExif = insertJpegSegments(await blob.arrayBuffer(), [exifApp1]);
+        resolve(new File([withExif], "sample-photo.jpg", { type: "image/jpeg", lastModified: Date.now() }));
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error("サンプル画像への Exif 埋め込みに失敗しました"));
+      }
     }, "image/jpeg", 0.92);
   });
 }

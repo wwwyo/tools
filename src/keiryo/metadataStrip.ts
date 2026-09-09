@@ -10,8 +10,13 @@ import { asciiAt, byteAt } from "./imageMeta";
 
 /** 検出した1セグメント/チャンク分の情報 */
 export interface MetadataSegment {
+  /** 同名セグメントが複数あっても一意になる安定 id（例: "COM#0"）。チェックボックスの選択状態のキー */
+  id: string;
   name: string;
   bytes: number;
+  /** 元バッファ内でのこのセグメント/チャンクの開始・終了オフセット（マーカー/チャンクヘッダーを含む） */
+  start: number;
+  end: number;
 }
 
 /** 元ファイルのメタデータ走査結果 */
@@ -79,12 +84,20 @@ function walkJpegMarkers(
   return bytes.length;
 }
 
+/** 同名セグメント/チャンクが複数あっても一意になる id を振る。scan と strip で同じ規則を使う */
+function nextId(counts: Map<string, number>, name: string): string {
+  const idx = counts.get(name) ?? 0;
+  counts.set(name, idx + 1);
+  return `${name}#${idx}`;
+}
+
 function scanJpegMetadata(buf: ArrayBuffer): MetadataScanResult {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
   const segments: MetadataSegment[] = [];
+  const counts = new Map<string, number>();
   walkJpegMarkers(bytes, view, (_marker, segStart, segEnd, label) => {
-    if (label) segments.push({ name: label, bytes: segEnd - segStart });
+    if (label) segments.push({ id: nextId(counts, label), name: label, bytes: segEnd - segStart, start: segStart, end: segEnd });
   });
   return {
     format: "jpeg",
@@ -94,13 +107,19 @@ function scanJpegMetadata(buf: ArrayBuffer): MetadataScanResult {
   };
 }
 
-/** メタデータ判定済みのセグメントだけを読み飛ばして JPEG を再構築する（デコードに必要な部分は一切変更しない） */
-function stripJpegMetadata(buf: ArrayBuffer): ArrayBuffer {
+/** 選ばれたセグメント（id）だけを読み飛ばして JPEG を再構築する（デコードに必要な部分は一切変更しない） */
+function stripJpegMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): ArrayBuffer {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
   const chunks: Uint8Array[] = [bytes.subarray(0, 2)]; // SOI
+  const counts = new Map<string, number>();
   const sosOffset = walkJpegMarkers(bytes, view, (_marker, segStart, segEnd, label) => {
-    if (!label) chunks.push(bytes.subarray(segStart, segEnd));
+    if (!label) {
+      chunks.push(bytes.subarray(segStart, segEnd));
+      return;
+    }
+    const id = nextId(counts, label);
+    if (!removeIds.has(id)) chunks.push(bytes.subarray(segStart, segEnd));
   });
   chunks.push(bytes.subarray(sosOffset)); // SOS 以降（スキャンデータ + EOI）はそのまま連結
   return concatUint8Arrays(chunks);
@@ -131,8 +150,9 @@ function scanPngMetadata(buf: ArrayBuffer): MetadataScanResult {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
   const segments: MetadataSegment[] = [];
+  const counts = new Map<string, number>();
   walkPngChunks(bytes, view, (type, start, end) => {
-    if (PNG_STRIP_CHUNK_TYPES.has(type)) segments.push({ name: type, bytes: end - start });
+    if (PNG_STRIP_CHUNK_TYPES.has(type)) segments.push({ id: nextId(counts, type), name: type, bytes: end - start, start, end });
   });
   return {
     format: "png",
@@ -142,12 +162,18 @@ function scanPngMetadata(buf: ArrayBuffer): MetadataScanResult {
   };
 }
 
-function stripPngMetadata(buf: ArrayBuffer): ArrayBuffer {
+function stripPngMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): ArrayBuffer {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
   const chunks: Uint8Array[] = [bytes.subarray(0, 8)]; // シグネチャ
+  const counts = new Map<string, number>();
   walkPngChunks(bytes, view, (type, start, end) => {
-    if (!PNG_STRIP_CHUNK_TYPES.has(type)) chunks.push(bytes.subarray(start, end));
+    if (!PNG_STRIP_CHUNK_TYPES.has(type)) {
+      chunks.push(bytes.subarray(start, end));
+      return;
+    }
+    const id = nextId(counts, type);
+    if (!removeIds.has(id)) chunks.push(bytes.subarray(start, end));
   });
   return concatUint8Arrays(chunks);
 }
@@ -169,6 +195,7 @@ function scanWebpMetadata(buf: ArrayBuffer): MetadataScanResult {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
   const segments: MetadataSegment[] = [];
+  const counts = new Map<string, number>();
   let offset = 12; // "RIFF" + size(4) + "WEBP"
   while (offset + 8 <= bytes.length) {
     const fourCc = asciiAt(bytes, offset, 4);
@@ -176,7 +203,7 @@ function scanWebpMetadata(buf: ArrayBuffer): MetadataScanResult {
     const paddedSize = size + (size % 2);
     const chunkEnd = offset + 8 + paddedSize;
     const name = WEBP_METADATA_CHUNKS[fourCc];
-    if (name) segments.push({ name, bytes: 8 + paddedSize });
+    if (name) segments.push({ id: nextId(counts, name), name, bytes: 8 + paddedSize, start: offset, end: chunkEnd });
     offset = chunkEnd;
   }
   return {
@@ -197,9 +224,38 @@ export function scanMetadata(buf: ArrayBuffer, sniffedFormat: string): MetadataS
   return { format: "other", segments: [], totalBytes: 0, strippable: false };
 }
 
-/** ロスレスにメタデータを除去したバイト列を返す。除去に対応しない形式は null を返す */
-export function stripMetadata(buf: ArrayBuffer, sniffedFormat: string): ArrayBuffer | null {
-  if (sniffedFormat === "JPEG") return stripJpegMetadata(buf);
-  if (sniffedFormat === "PNG") return stripPngMetadata(buf);
+/** ロスレスに、選んだセグメント（id）だけを除去したバイト列を返す。除去に対応しない形式は null を返す */
+export function stripMetadata(buf: ArrayBuffer, sniffedFormat: string, removeIds: ReadonlySet<string>): ArrayBuffer | null {
+  if (sniffedFormat === "JPEG") return stripJpegMetadata(buf, removeIds);
+  if (sniffedFormat === "PNG") return stripPngMetadata(buf, removeIds);
   return null;
+}
+
+/**
+ * canvas 再エンコード後の JPEG（SOI の直後、APP0 があればその直後）に、元ファイルから
+ * 抜き出した完全な形のセグメント（マーカー + 長さ + payload）を差し込む。
+ * canvas 出力は Exif 等を一切持たないため、削除ではなく挿入だけを行う単純な操作で足りる。
+ */
+export function insertJpegSegments(jpegBuf: ArrayBuffer, segments: Uint8Array[]): ArrayBuffer {
+  if (segments.length === 0) return jpegBuf;
+  const bytes = new Uint8Array(jpegBuf);
+  const view = new DataView(jpegBuf);
+  let insertAt = 2; // SOI の直後
+  if (bytes.length > 4 && view.getUint16(2) === 0xffe0) {
+    const app0Length = view.getUint16(4);
+    insertAt = 4 + app0Length; // APP0 の直後
+  }
+  const before = bytes.subarray(0, insertAt);
+  const after = bytes.subarray(insertAt);
+  const totalLength = before.length + segments.reduce((sum, seg) => sum + seg.length, 0) + after.length;
+  const out = new Uint8Array(totalLength);
+  let offset = 0;
+  out.set(before, offset);
+  offset += before.length;
+  for (const seg of segments) {
+    out.set(seg, offset);
+    offset += seg.length;
+  }
+  out.set(after, offset);
+  return out.buffer;
 }

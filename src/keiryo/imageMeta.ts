@@ -6,6 +6,8 @@
  * 独立に「実際が何のフォーマットか」を判定する。
  */
 
+import { parseJpegExifOrientation } from "./exif";
+
 /** ファイル形式のスニッフ結果 */
 export interface FormatSniffResult {
   format: string;
@@ -155,46 +157,9 @@ export function parsePngBitDepth(buf: ArrayBuffer): string | null {
   }
 }
 
-/** JPEG の Exif セグメント（APP1）から Orientation タグ（0x0112）を読む */
-export function parseJpegExifOrientation(buf: ArrayBuffer): number | null {
-  try {
-    const view = new DataView(buf);
-    if (view.getUint16(0) !== 0xffd8) return null;
-    let offset = 2;
-    const length = view.byteLength;
-    while (offset < length - 1) {
-      const marker = view.getUint16(offset);
-      if (marker === 0xffe1) {
-        const segStart = offset + 4;
-        // "Exif\0\0"
-        if (view.getUint32(segStart) !== 0x45786966) return null;
-        const tiffOffset = segStart + 6;
-        const little = view.getUint16(tiffOffset) === 0x4949;
-        const firstIfdOffset = view.getUint32(tiffOffset + 4, little);
-        const ifdOffset = tiffOffset + firstIfdOffset;
-        const entryCount = view.getUint16(ifdOffset, little);
-        for (let i = 0; i < entryCount; i++) {
-          const entryOffset = ifdOffset + 2 + i * 12;
-          const tag = view.getUint16(entryOffset, little);
-          if (tag === 0x0112) {
-            return view.getUint16(entryOffset + 8, little);
-          }
-        }
-        return null;
-      }
-      if ((marker & 0xff00) !== 0xff00) break;
-      if (marker === 0xffd8 || marker === 0xffd9) {
-        offset += 2;
-      } else {
-        const segLen = view.getUint16(offset + 2);
-        offset += 2 + segLen;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
+// JPEG の Exif Orientation 読み取りは exif.ts の TIFF/IFD パーサに寄せた（メタデータカードの
+// 詳細な Exif テーブル・編集機能と同じロジックを共有するため）。ここでは re-export のみ行う。
+export { parseJpegExifOrientation };
 
 /**
  * 画像を縮小してから走査し、アルファチャンネルに 255 未満の画素があるかを調べる。

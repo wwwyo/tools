@@ -2,6 +2,8 @@ import "../global.css";
 import "./styles.css";
 import { extractMetadata, formatBytes, loadImage, type ImageMeta } from "./imageMeta";
 import { detectFormatSupport, generateSampleFile, type ProbedFormat } from "./encode";
+import { scanMetadata, type MetadataScanResult } from "./metadataStrip";
+import { extractExifPayloadFromJpegHeader, parseExifStructure, readExifTags, type ExifEdits, type ExifTags } from "./exif";
 import {
   formatDelta,
   isFormatSupported,
@@ -12,8 +14,12 @@ import {
   buildSizeInfoHtml,
   buildSizeLadderHtml,
   buildFormatComparisonHtml,
-  buildMetadataSegmentsHtml,
-  metadataStatusText,
+  buildMetadataSegmentRowsHtml,
+  buildMetadataTotalsHtml,
+  buildExifTableHtml,
+  metadataStatusNotes,
+  metadataSummaryLines,
+  defaultRemoveIds,
   buildOutputInfoHtml,
   type FormatChoice,
   type PipelineResult,
@@ -173,7 +179,13 @@ interface AppState {
   quality: number;
   longEdgeCap: number | null;
   formatChoice: FormatChoice;
-  stripMetadataEnabled: boolean;
+  /** 除去するメタデータセグメントの id 一式（未読み込み時は空） */
+  removeIds: Set<string>;
+  exifEdits: ExifEdits;
+  /** 画像読み込み時に一度だけ求める初期スキャン。セグメント一覧・Exif テーブルの元データ */
+  metadataScan: MetadataScanResult | null;
+  exifTags: ExifTags | null;
+  metadataControls: MetadataControls | null;
   activeStage: StageId;
   pipeline: PipelineResult | null;
   support: Record<ProbedFormat, boolean> | null;
@@ -197,7 +209,11 @@ const state: AppState = {
   quality: 0.8,
   longEdgeCap: null,
   formatChoice: "original",
-  stripMetadataEnabled: true,
+  removeIds: new Set<string>(),
+  exifEdits: { removeGps: false },
+  metadataScan: null,
+  exifTags: null,
+  metadataControls: null,
   activeStage: "original",
   pipeline: null,
   support: null,
@@ -256,10 +272,12 @@ function createControlsRow(): HTMLDivElement {
 interface SizeControls {
   rootEl: HTMLDivElement;
   longEdgeSelectEl: HTMLSelectElement;
-  qualityInputEl: HTMLInputElement;
-  qualityValueEl: HTMLSpanElement;
+  qualityDisplayEl: HTMLSpanElement;
 }
 
+// 品質はフォーマットカードだけが操作する単一の state.quality を持つ（サイズカードには
+// 「フォーマットで変更」と添えた読み取り専用の表示だけを置く）。2枚のカードで range を
+// 同期させていた頃の setQuality の相互書き込みは、片方が真実の発生源でないと混乱するため廃止した
 function buildSizeControls(): SizeControls {
   const rootEl = createControlsRow();
   rootEl.innerHTML = `
@@ -271,17 +289,12 @@ function buildSizeControls(): SizeControls {
         aria-label="長辺の上限"
       ></select>
     </label>
-    <label class="flex items-center gap-2">
-      <span>品質</span>
-      <input type="range" id="quality-size" min="0.3" max="1" step="0.05" value="0.8" class="w-32 accent-primary" />
-      <span id="quality-size-value" class="w-10 shrink-0 font-mono text-foreground">0.80</span>
-    </label>
+    <span id="quality-display" class="text-muted-foreground">品質 0.80（フォーマットで変更）</span>
   `;
   return {
     rootEl,
     longEdgeSelectEl: rootEl.querySelector("#long-edge") as HTMLSelectElement,
-    qualityInputEl: rootEl.querySelector("#quality-size") as HTMLInputElement,
-    qualityValueEl: rootEl.querySelector("#quality-size-value") as HTMLSpanElement,
+    qualityDisplayEl: rootEl.querySelector("#quality-display") as HTMLSpanElement,
   };
 }
 
@@ -319,33 +332,167 @@ function buildFormatControls(): FormatControls {
 
 interface MetadataControls {
   rootEl: HTMLDivElement;
-  checkboxEl: HTMLInputElement;
+  segListEl: HTMLDivElement;
+  orientationSelectEl: HTMLSelectElement | null;
+  dateTimeInputEl: HTMLInputElement | null;
+  dateTimeHintEl: HTMLParagraphElement | null;
+  dateTimeOriginalInputEl: HTMLInputElement | null;
+  dateTimeOriginalHintEl: HTMLParagraphElement | null;
+  gpsCheckboxEl: HTMLInputElement | null;
 }
 
-function buildMetadataControls(): MetadataControls {
-  const rootEl = createControlsRow();
-  rootEl.innerHTML = `
-    <label class="flex items-center gap-1.5">
-      <input type="checkbox" id="strip-metadata" checked class="accent-primary" />
-      <span>メタデータを除去</span>
-    </label>
-  `;
-  return { rootEl, checkboxEl: rootEl.querySelector("#strip-metadata") as HTMLInputElement };
+const ORIENTATION_LABELS: Record<number, string> = {
+  1: "1 そのまま",
+  2: "2",
+  3: "3 180°",
+  4: "4",
+  5: "5",
+  6: "6 時計回り90°",
+  7: "7",
+  8: "8 反時計回り90°",
+};
+
+function buildOrientationOptionsHtml(current: number): string {
+  return Object.entries(ORIENTATION_LABELS)
+    .map(([value, label]) => `<option value="${value}"${Number(value) === current ? " selected" : ""}>${label}</option>`)
+    .join("");
 }
 
+/**
+ * メタデータカードのコントロール（セグメント一覧の除去チェックボックス + Exif の編集フィールド）は
+ * 画像の中身（検出セグメント・Exif の有無）に依存するため、他カードのように起動時1回ではなく
+ * 画像読み込みごとに作り直す。以降の再計算（recompute）では中身を作り直さず、この DOM をそのまま使い回す。
+ */
+function buildMetadataControls(scan: MetadataScanResult, exifTags: ExifTags | null, isJpeg: boolean): MetadataControls {
+  const rootEl = document.createElement("div");
+  rootEl.className = "flex flex-col gap-3 border-b border-border pb-3 mb-3 text-xs";
+
+  const segListEl = document.createElement("div");
+  segListEl.className = "flex flex-col";
+  segListEl.innerHTML = buildMetadataSegmentRowsHtml(scan, state.removeIds, false);
+
+  const segSection = document.createElement("div");
+  segSection.className = "flex flex-col gap-1.5";
+  segSection.innerHTML = `<span class="text-sm font-semibold text-foreground">除去するメタデータ</span>`;
+  segSection.append(segListEl);
+  rootEl.append(segSection);
+
+  segListEl.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("keiryo-seg-checkbox")) return;
+    const id = target.dataset.segId;
+    if (!id) return;
+    if (target.checked) state.removeIds.add(id);
+    else state.removeIds.delete(id);
+    scheduleRecompute();
+  });
+
+  let orientationSelectEl: HTMLSelectElement | null = null;
+  let dateTimeInputEl: HTMLInputElement | null = null;
+  let dateTimeHintEl: HTMLParagraphElement | null = null;
+  let dateTimeOriginalInputEl: HTMLInputElement | null = null;
+  let dateTimeOriginalHintEl: HTMLParagraphElement | null = null;
+  let gpsCheckboxEl: HTMLInputElement | null = null;
+
+  if (isJpeg && exifTags) {
+    const exifSection = document.createElement("div");
+    exifSection.className = "flex flex-col gap-2 border-t border-border/60 pt-2";
+    exifSection.innerHTML = `
+      <span class="text-sm font-semibold text-foreground">Exif 詳細</span>
+      <div id="exif-table" class="flex flex-col"></div>
+      <div class="flex flex-col gap-2 pt-1">
+        <label class="flex items-center gap-2">
+          <span class="w-32 shrink-0">Orientation</span>
+          <select id="orientation-select" class="rounded border border-border bg-background px-1.5 py-1 text-foreground"></select>
+        </label>
+        <label class="flex items-center gap-2">
+          <span class="w-32 shrink-0">DateTime</span>
+          <input id="datetime-input" type="text" maxlength="19" pattern="\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}" placeholder="YYYY:MM:DD HH:MM:SS" class="w-44 rounded border border-border bg-background px-1.5 py-1 font-mono text-foreground" />
+        </label>
+        <p id="datetime-hint" class="hidden pl-32 text-destructive">YYYY:MM:DD HH:MM:SS 形式・19文字で入力してください</p>
+        <label class="flex items-center gap-2">
+          <span class="w-32 shrink-0">DateTimeOriginal</span>
+          <input id="datetime-original-input" type="text" maxlength="19" pattern="\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}" placeholder="YYYY:MM:DD HH:MM:SS" class="w-44 rounded border border-border bg-background px-1.5 py-1 font-mono text-foreground" />
+        </label>
+        <p id="datetime-original-hint" class="hidden pl-32 text-destructive">YYYY:MM:DD HH:MM:SS 形式・19文字で入力してください</p>
+        <label class="flex items-center gap-1.5">
+          <input type="checkbox" id="gps-remove" class="accent-primary" />
+          <span>GPS 情報を消す</span>
+        </label>
+      </div>
+    `;
+    rootEl.append(exifSection);
+
+    const exifTableEl = exifSection.querySelector("#exif-table") as HTMLDivElement;
+    exifTableEl.innerHTML = buildExifTableHtml(exifTags);
+
+    orientationSelectEl = exifSection.querySelector("#orientation-select") as HTMLSelectElement;
+    orientationSelectEl.innerHTML = buildOrientationOptionsHtml(exifTags.orientation ?? 1);
+    orientationSelectEl.addEventListener("change", () => {
+      state.exifEdits.orientation = Number.parseInt((orientationSelectEl as HTMLSelectElement).value, 10);
+      scheduleRecompute();
+    });
+
+    dateTimeInputEl = exifSection.querySelector("#datetime-input") as HTMLInputElement;
+    dateTimeHintEl = exifSection.querySelector("#datetime-hint") as HTMLParagraphElement;
+    if (exifTags.dateTime) dateTimeInputEl.value = exifTags.dateTime;
+    dateTimeInputEl.addEventListener("input", () => {
+      const value = (dateTimeInputEl as HTMLInputElement).value;
+      const valid = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/.test(value);
+      (dateTimeHintEl as HTMLParagraphElement).classList.toggle("hidden", valid || value.length === 0);
+      if (valid) {
+        state.exifEdits.dateTime = value;
+        scheduleRecompute();
+      } else {
+        delete state.exifEdits.dateTime;
+      }
+    });
+
+    dateTimeOriginalInputEl = exifSection.querySelector("#datetime-original-input") as HTMLInputElement;
+    dateTimeOriginalHintEl = exifSection.querySelector("#datetime-original-hint") as HTMLParagraphElement;
+    if (exifTags.dateTimeOriginal) dateTimeOriginalInputEl.value = exifTags.dateTimeOriginal;
+    dateTimeOriginalInputEl.addEventListener("input", () => {
+      const value = (dateTimeOriginalInputEl as HTMLInputElement).value;
+      const valid = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/.test(value);
+      (dateTimeOriginalHintEl as HTMLParagraphElement).classList.toggle("hidden", valid || value.length === 0);
+      if (valid) {
+        state.exifEdits.dateTimeOriginal = value;
+        scheduleRecompute();
+      } else {
+        delete state.exifEdits.dateTimeOriginal;
+      }
+    });
+
+    gpsCheckboxEl = exifSection.querySelector("#gps-remove") as HTMLInputElement;
+    gpsCheckboxEl.checked = exifTags.hasGps;
+    gpsCheckboxEl.addEventListener("change", () => {
+      state.exifEdits.removeGps = (gpsCheckboxEl as HTMLInputElement).checked;
+      scheduleRecompute();
+    });
+  }
+
+  return {
+    rootEl,
+    segListEl,
+    orientationSelectEl,
+    dateTimeInputEl,
+    dateTimeHintEl,
+    dateTimeOriginalInputEl,
+    dateTimeOriginalHintEl,
+    gpsCheckboxEl,
+  };
+}
 
 const sizeControls = buildSizeControls();
 const formatControls = buildFormatControls();
-const metadataControls = buildMetadataControls();
 
-/** サイズ・フォーマット両カードの品質 range を同期する（片方の入力で両方 + state を更新） */
-function setQuality(value: number, source?: HTMLInputElement): void {
+/** フォーマットカードの品質 range だけが state.quality を書き換える単一の発生源 */
+function setQuality(value: number): void {
   state.quality = value;
   const text = value.toFixed(2);
-  if (sizeControls.qualityInputEl !== source) sizeControls.qualityInputEl.value = String(value);
-  if (formatControls.qualityInputEl !== source) formatControls.qualityInputEl.value = String(value);
-  sizeControls.qualityValueEl.textContent = text;
+  formatControls.qualityInputEl.value = String(value);
   formatControls.qualityValueEl.textContent = text;
+  sizeControls.qualityDisplayEl.textContent = `品質 ${text}（フォーマットで変更）`;
   updateFormatNode();
   if (state.activeStage === "size") syncSizeLadderForQuality();
   scheduleRecompute();
@@ -680,13 +827,7 @@ function updateMetadataNode(): void {
     els.summaryEl.textContent = "計算中…";
     return;
   }
-  const d = pipeline.metadata.detail;
-  if (d.cameFromCanvas) {
-    els.summaryEl.textContent = "再エンコードで除去済み";
-    return;
-  }
-  const bytesText = `Exif など ${formatBytes(d.scan.totalBytes)}`;
-  els.summaryEl.textContent = d.strippedApplied ? `${bytesText} を除去` : `${bytesText}（保持）`;
+  els.summaryEl.textContent = metadataSummaryLines(pipeline.metadata.detail).join("\n");
 }
 
 function updateOutputNode(): void {
@@ -830,24 +971,31 @@ function renderFormatDetail(): void {
 }
 
 function renderMetadataDetail(): void {
+  const controls = state.metadataControls;
+  if (!controls) return;
   const pipeline = state.pipeline;
   if (!pipeline) {
-    renderDetailCard(metadataControls.rootEl, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
+    renderDetailCard(controls.rootEl, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
     return;
   }
   const d = pipeline.metadata.detail;
+  // canvas 出力で引き継げない形式（WebP/PNG/AVIF）のときだけ、セグメントチェックボックスを
+  // 視覚的に disabled にする（選択状態自体は state.removeIds に残したまま触らない）
+  const checkboxesDisabled = d.cameFromCanvas && d.carryUnsupported;
+  controls.segListEl.querySelectorAll<HTMLInputElement>(".keiryo-seg-checkbox").forEach((el) => {
+    el.disabled = checkboxesDisabled;
+  });
+  const notesHtml = metadataStatusNotes(d)
+    .map((note) => `<p class="text-xs text-muted-foreground">${note}</p>`)
+    .join("");
   const contentEl = buildDetailContentEl(
     "flex flex-col gap-1.5",
     `
-      <div class="flex items-baseline justify-between gap-3 border-b border-border py-1.5 text-sm">
-        <span class="font-semibold text-foreground">メタデータ合計</span>
-        <span class="font-mono text-xs text-foreground">${formatBytes(d.scan.totalBytes)}</span>
-      </div>
-      <div class="flex flex-col">${buildMetadataSegmentsHtml(d.scan)}</div>
-      <p class="text-xs text-muted-foreground">${metadataStatusText(d)}</p>
+      ${buildMetadataTotalsHtml(d.removedBytes, d.keptBytes)}
+      ${notesHtml}
     `,
   );
-  renderDetailCard(metadataControls.rootEl, contentEl);
+  renderDetailCard(controls.rootEl, contentEl);
 }
 
 function renderOutputDetail(): void {
@@ -965,7 +1113,8 @@ async function runPipelineOnce(): Promise<void> {
       quality: state.quality,
       longEdgeCap: state.longEdgeCap,
       formatChoice: state.formatChoice,
-      stripMetadataEnabled: state.stripMetadataEnabled,
+      removeIds: state.removeIds,
+      exifEdits: state.exifEdits,
       support,
     });
     if (state.meta !== meta) return;
@@ -1029,6 +1178,14 @@ async function handleFileSelected(file: File): Promise<void> {
     if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
     revokeOutputObjectUrl();
 
+    // メタデータのセグメント一覧・Exif タグは画像ごとに固定なので、パイプラインとは独立に
+    // ここで一度だけ求める（メタデータカードのコントロール DOM を組み立てる元データ）
+    const metadataScan = scanMetadata(originalArrayBuffer, meta.sniffedFormat);
+    const isJpeg = meta.sniffedFormat === "JPEG";
+    const exifPayload = isJpeg ? extractExifPayloadFromJpegHeader(originalArrayBuffer.slice(0, 65536)) : null;
+    const exifStructure = exifPayload ? parseExifStructure(exifPayload) : null;
+    const exifTags = exifPayload && exifStructure ? readExifTags(exifPayload, exifStructure) : null;
+
     state.file = file;
     state.objectUrl = objectUrl;
     state.originalArrayBuffer = originalArrayBuffer;
@@ -1037,19 +1194,21 @@ async function handleFileSelected(file: File): Promise<void> {
     state.quality = 0.8;
     state.longEdgeCap = null;
     state.formatChoice = "original";
-    state.stripMetadataEnabled = true;
+    state.removeIds = defaultRemoveIds(metadataScan);
+    state.exifEdits = { removeGps: exifTags?.hasGps ?? false };
+    state.metadataScan = metadataScan;
+    state.exifTags = exifTags;
     state.activeStage = "original";
     state.pipeline = null;
     state.avifComparisonPending = false;
     state.sizeLadderCache = new Map();
     state.sizeLadderRows = null;
-    sizeControls.qualityInputEl.value = "0.8";
     formatControls.qualityInputEl.value = "0.8";
-    sizeControls.qualityValueEl.textContent = "0.80";
     formatControls.qualityValueEl.textContent = "0.80";
+    sizeControls.qualityDisplayEl.textContent = "品質 0.80（フォーマットで変更）";
     sizeControls.longEdgeSelectEl.innerHTML = buildLongEdgeOptionsHtml(meta, null);
     formatControls.formatSelectEl.innerHTML = buildFormatSelectOptions(support, "original");
-    metadataControls.checkboxEl.checked = true;
+    state.metadataControls = buildMetadataControls(metadataScan, exifTags, isJpeg);
 
     resultSectionEl.classList.remove("hidden");
     resultSectionEl.classList.add("flex");
@@ -1118,12 +1277,8 @@ sampleButtonEl.addEventListener("click", () => {
     });
 });
 
-sizeControls.qualityInputEl.addEventListener("input", () => {
-  setQuality(Number.parseFloat(sizeControls.qualityInputEl.value), sizeControls.qualityInputEl);
-});
-
 formatControls.qualityInputEl.addEventListener("input", () => {
-  setQuality(Number.parseFloat(formatControls.qualityInputEl.value), formatControls.qualityInputEl);
+  setQuality(Number.parseFloat(formatControls.qualityInputEl.value));
 });
 
 sizeControls.longEdgeSelectEl.addEventListener("change", () => {
@@ -1137,10 +1292,6 @@ formatControls.formatSelectEl.addEventListener("change", () => {
   scheduleRecompute();
 });
 
-metadataControls.checkboxEl.addEventListener("change", () => {
-  state.stripMetadataEnabled = metadataControls.checkboxEl.checked;
-  scheduleRecompute();
-});
 
 window.addEventListener("resize", () => {
   if (!state.meta) return;

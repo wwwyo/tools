@@ -18,7 +18,8 @@ import {
   type OutputFormat,
   type ProbedFormat,
 } from "./encode";
-import { scanMetadata, stripMetadata, type MetadataScanResult } from "./metadataStrip";
+import { scanMetadata, stripMetadata, insertJpegSegments, type MetadataScanResult, type MetadataSegment } from "./metadataStrip";
+import { applyExifEdits, type ExifEdits } from "./exif";
 
 /** 元ファイルの実形式から、そのまま同形式で再エンコードする際に使う出力形式へ落とす */
 const SNIFFED_TO_REENCODE_FORMAT: Record<string, OutputFormat> = {
@@ -68,7 +69,9 @@ export interface PipelineParams {
   quality: number;
   longEdgeCap: number | null;
   formatChoice: FormatChoice;
-  stripMetadataEnabled: boolean;
+  /** 除去するメタデータセグメントの id（metadataStrip.ts の MetadataSegment.id）一式 */
+  removeIds: Set<string>;
+  exifEdits: ExifEdits;
   support: Record<ProbedFormat, boolean>;
 }
 
@@ -110,10 +113,23 @@ export interface FormatStageDetail {
 
 export interface MetadataStageDetail {
   scan: MetadataScanResult;
+  /** サイズ・フォーマット段で canvas 再エンコードが起きたか（true なら元セグメントは blob から失われている） */
   cameFromCanvas: boolean;
-  strippedApplied: boolean;
-  webpUnsupported: boolean;
-  toggleOn: boolean;
+  /** この段を出た時点の形式 */
+  outputFormat: CurrentFormat;
+  /** ユーザーが「除去」を選んだセグメントの合計バイト数 */
+  removedBytes: number;
+  /** 除去せず残す（保持する）セグメントの合計バイト数 */
+  keptBytes: number;
+  /** canvas 出力（JPEG）へ Exif/XMP/COM を再挿入できたか */
+  carried: boolean;
+  /** canvas 出力だが WebP/PNG/AVIF のため引き継げないケース */
+  carryUnsupported: boolean;
+  gpsRemoved: boolean;
+  /** canvas 出力への再挿入時は常に true（drawImage で向きは既に反映済みのため 1 に強制する） */
+  orientationForcedTo1: boolean;
+  /** ICC プロファイルが保持されなかったか（canvas 出力は常に true。ロスレス経路ではユーザー選択次第） */
+  iccDropped: boolean;
 }
 
 export interface OutputStageDetail {
@@ -330,47 +346,128 @@ async function computeFormatStage(
   };
 }
 
+/** JPEG 出力へ再挿入する対象になりうるセグメント名。ICC はここに含めない（canvas 出力は常に sRGB のため） */
+const CARRY_SEGMENT_NAMES = new Set(["APP1 Exif", "APP1 XMP", "COM"]);
+
+/**
+ * 元バッファのコピーへ、残す（除去しない）Exif セグメントがあれば固定長編集を in-place で
+ * 焼き込む。編集はサイズを変えないため、以降 scan.segments の start/end はそのまま使い回せる。
+ * 対象の Exif セグメントが無ければ元バッファをそのまま返す（コピー不要）。
+ */
+function buildEditedOriginalBuffer(originalArrayBuffer: ArrayBuffer, scan: MetadataScanResult, edits: ExifEdits): ArrayBuffer {
+  const exifSeg = scan.segments.find((s) => s.name === "APP1 Exif");
+  if (!exifSeg) return originalArrayBuffer;
+  const copy = originalArrayBuffer.slice(0);
+  const bytes = new Uint8Array(copy);
+  const payloadStart = exifSeg.start + 4; // マーカー(2) + 長さ(2) を読み飛ばす
+  const payload = bytes.subarray(payloadStart, exifSeg.end);
+  const edited = applyExifEdits(payload, edits);
+  bytes.set(edited.subarray(0, payload.length), payloadStart);
+  return copy;
+}
+
+function segmentBytesSum(scan: MetadataScanResult, predicate: (s: MetadataSegment) => boolean): number {
+  return scan.segments.filter(predicate).reduce((sum, s) => sum + s.bytes, 0);
+}
+
 async function computeMetadataStage(
   params: PipelineParams,
   formatOutput: StageBlob,
 ): Promise<{ output: StageBlob; detail: MetadataStageDetail }> {
-  const { meta, originalArrayBuffer, stripMetadataEnabled } = params;
+  const { meta, originalArrayBuffer, removeIds, exifEdits } = params;
   const scan = scanMetadata(originalArrayBuffer, meta.sniffedFormat);
+  const removedBytes = segmentBytesSum(scan, (s) => removeIds.has(s.id));
+  const keptBytes = scan.totalBytes - removedBytes;
+  const hasIcc = scan.segments.some((s) => s.name === "APP2 ICC_PROFILE");
 
-  if (formatOutput.fromCanvas) {
-    // canvas 再エンコードを経た時点でメタデータは既に失われている。再度削る操作は不要
+  if (!formatOutput.fromCanvas) {
+    // ロスレス経路: 元バイト列がまだ生きているので、残す Exif には編集を焼き込んでから
+    // 選んだセグメントだけを間引く。WebP のように除去非対応なら編集だけ反映したバイト列を使う
+    const editedBuffer = buildEditedOriginalBuffer(originalArrayBuffer, scan, exifEdits);
+    const stripped = scan.strippable ? stripMetadata(editedBuffer, meta.sniffedFormat, removeIds) : null;
+    const outBuffer = stripped ?? editedBuffer;
+    const blob = outBuffer === originalArrayBuffer ? formatOutput.blob : new Blob([outBuffer], { type: formatOutput.blob.type });
+    return {
+      output: { ...formatOutput, blob, bytes: blob.size },
+      detail: {
+        scan,
+        cameFromCanvas: false,
+        outputFormat: formatOutput.format,
+        removedBytes,
+        keptBytes,
+        carried: false,
+        carryUnsupported: false,
+        gpsRemoved: exifEdits.removeGps,
+        orientationForcedTo1: false,
+        iccDropped: hasIcc && removeIds.has(scan.segments.find((s) => s.name === "APP2 ICC_PROFILE")?.id ?? ""),
+      },
+    };
+  }
+
+  // canvas 再エンコードを経た時点でメタデータは完全に失われている。JPEG 出力のときだけ、
+  // 元ファイルの Exif/XMP/COM を（ICC を除いて）再挿入できる
+  if (formatOutput.format !== "jpeg" || meta.sniffedFormat !== "JPEG" || scan.segments.length === 0) {
     return {
       output: formatOutput,
       detail: {
         scan,
         cameFromCanvas: true,
-        strippedApplied: false,
-        webpUnsupported: false,
-        toggleOn: stripMetadataEnabled,
+        outputFormat: formatOutput.format,
+        removedBytes,
+        keptBytes,
+        carried: false,
+        carryUnsupported: formatOutput.format !== "jpeg",
+        gpsRemoved: exifEdits.removeGps,
+        orientationForcedTo1: false,
+        iccDropped: hasIcc,
       },
     };
   }
 
-  if (!stripMetadataEnabled) {
+  // drawImage は既に Orientation を反映済みなので、再挿入する Exif は向き 1 に強制する
+  // （そのまま向きの値だけ引き継ぐと、canvas が回転済みの上に Exif の回転指示が二重にかかる）
+  const carryEdits: ExifEdits = { ...exifEdits, orientation: 1 };
+  const editedBuffer = buildEditedOriginalBuffer(originalArrayBuffer, scan, carryEdits);
+  const editedBytes = new Uint8Array(editedBuffer);
+  const carrySegments = scan.segments
+    .filter((s) => CARRY_SEGMENT_NAMES.has(s.name) && !removeIds.has(s.id))
+    .map((s) => editedBytes.subarray(s.start, s.end));
+
+  if (carrySegments.length === 0) {
     return {
       output: formatOutput,
-      detail: { scan, cameFromCanvas: false, strippedApplied: false, webpUnsupported: false, toggleOn: false },
+      detail: {
+        scan,
+        cameFromCanvas: true,
+        outputFormat: formatOutput.format,
+        removedBytes,
+        keptBytes,
+        carried: false,
+        carryUnsupported: false,
+        gpsRemoved: exifEdits.removeGps,
+        orientationForcedTo1: false,
+        iccDropped: hasIcc,
+      },
     };
   }
 
-  const stripped = stripMetadata(originalArrayBuffer, meta.sniffedFormat);
-  if (stripped === null) {
-    // WebP は RIFF サイズ / VP8X flags の再計算が必要で安全にロスレス除去できないため未対応のまま通す
-    return {
-      output: formatOutput,
-      detail: { scan, cameFromCanvas: false, strippedApplied: false, webpUnsupported: true, toggleOn: true },
-    };
-  }
-
-  const strippedBlob = new Blob([stripped], { type: formatOutput.blob.type });
+  const canvasArrayBuffer = await formatOutput.blob.arrayBuffer();
+  const withSegments = insertJpegSegments(canvasArrayBuffer, carrySegments);
+  const blob = new Blob([withSegments], { type: "image/jpeg" });
   return {
-    output: { ...formatOutput, blob: strippedBlob, bytes: strippedBlob.size },
-    detail: { scan, cameFromCanvas: false, strippedApplied: true, webpUnsupported: false, toggleOn: true },
+    output: { ...formatOutput, blob, bytes: blob.size },
+    detail: {
+      scan,
+      cameFromCanvas: true,
+      outputFormat: formatOutput.format,
+      removedBytes,
+      keptBytes,
+      carried: true,
+      carryUnsupported: false,
+      gpsRemoved: exifEdits.removeGps,
+      orientationForcedTo1: true,
+      iccDropped: hasIcc,
+    },
   };
 }
 
@@ -592,33 +689,117 @@ export function buildSizeInfoHtml(meta: ImageMeta, detail: SizeStageDetail, afte
 }
 
 
-/** メタデータノードのセグメント一覧 */
-export function buildMetadataSegmentsHtml(scan: MetadataScanResult): string {
+/** セグメント名から「除去」チェックボックスのデフォルト値を決める。ICC だけ既定で保持（色が変わるため） */
+export function defaultRemoveForSegmentName(name: string): boolean {
+  return name !== "APP2 ICC_PROFILE";
+}
+
+/** 除去できないメタデータ（scan.strippable === false の形式、例: WebP）で全チェックの初期値を決める際に使う */
+export function defaultRemoveIds(scan: MetadataScanResult): Set<string> {
+  return new Set(scan.segments.filter((s) => defaultRemoveForSegmentName(s.name)).map((s) => s.id));
+}
+
+/**
+ * メタデータノードの segment チェックボックス一覧。checkboxesDisabled は canvas 出力で
+ * この形式（WebP/PNG/AVIF）へは引き継げないケースで、選択operationがもう意味を持たないことを
+ * 視覚的にも伝えるために使う（disabled にするだけで、選択状態自体は保持する）
+ */
+export function buildMetadataSegmentRowsHtml(scan: MetadataScanResult, removeIds: ReadonlySet<string>, checkboxesDisabled: boolean): string {
   if (scan.segments.length === 0) {
     return `<p class="py-1 text-xs text-muted-foreground">検出されたメタデータセグメントはありません。</p>`;
   }
   return scan.segments
-    .map(
-      (seg) =>
-        `<div class="flex items-baseline justify-between gap-3 border-b border-border/60 py-1 text-sm last:border-b-0">
-          <span class="text-muted-foreground">${seg.name}</span>
-          <span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>
-        </div>`,
-    )
+    .map((seg) => {
+      const checked = removeIds.has(seg.id);
+      const iccNote =
+        seg.name === "APP2 ICC_PROFILE"
+          ? `<p class="pl-6 pb-1 text-xs text-muted-foreground">sRGB でない ICC プロファイルを除去すると色味が変わることがあります。</p>`
+          : "";
+      return (
+        `<div class="border-b border-border/60 py-1 last:border-b-0">` +
+        `<label class="flex items-center justify-between gap-3 text-sm">` +
+        `<span class="flex items-center gap-1.5"><input type="checkbox" class="keiryo-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="text-muted-foreground">${seg.name}</span></span>` +
+        `<span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>` +
+        `</label>${iccNote}` +
+        `</div>`
+      );
+    })
     .join("");
 }
 
-/** メタデータノードの状態説明文。分岐の意味は computeMetadataStage 側のコメント参照 */
-export function metadataStatusText(detail: MetadataStageDetail): string {
+/** メタデータカードの総量行「除去 N B / 保持 M B」 */
+export function buildMetadataTotalsHtml(removedBytes: number, keptBytes: number): string {
+  return (
+    `<div class="flex items-baseline justify-between gap-3 border-b border-border py-1.5 text-sm">` +
+    `<span class="font-semibold text-foreground">除去 / 保持</span>` +
+    `<span class="font-mono text-xs text-foreground">除去 ${formatBytes(removedBytes)} / 保持 ${formatBytes(keptBytes)}</span>` +
+    `</div>`
+  );
+}
+
+const EXIF_FIELD_LABELS: [key: keyof import("./exif").ExifTags, label: string][] = [
+  ["make", "Make"],
+  ["model", "Model"],
+  ["software", "Software"],
+  ["dateTime", "DateTime"],
+  ["dateTimeOriginal", "DateTimeOriginal"],
+  ["imageDescription", "ImageDescription"],
+  ["artist", "Artist"],
+  ["copyright", "Copyright"],
+];
+
+/** Exif 詳細テーブル（読み取り専用の一覧部分。Orientation と GPS は別行で扱う） */
+export function buildExifTableHtml(tags: import("./exif").ExifTags): string {
+  const rows = EXIF_FIELD_LABELS.filter(([key]) => tags[key] != null && tags[key] !== "")
+    .map(([key, label]) => detailRowHtml(label, String(tags[key])))
+    .join("");
+  const orientationRow = tags.orientation != null ? detailRowHtml("Orientation", String(tags.orientation)) : "";
+  const gpsRow = detailRowHtml(
+    "GPS 有無",
+    !tags.hasGps ? "なし" : tags.gpsLat != null && tags.gpsLon != null ? `あり（${tags.gpsLat.toFixed(4)}, ${tags.gpsLon.toFixed(4)}）` : "あり",
+  );
+  return rows + orientationRow + gpsRow;
+}
+
+/** メタデータカードの状態説明文（複数行になりうる） */
+export function metadataStatusNotes(detail: MetadataStageDetail): string[] {
+  const notes: string[] = [];
   if (detail.cameFromCanvas) {
-    return "サイズ・フォーマット段で再エンコード済みのため、この段では既にメタデータが失われています。";
+    if (detail.carried) {
+      notes.push("canvas 再エンコード後の JPEG に、元ファイルの Exif/XMP/COM を再挿入しました。向きは 1 に補正済みです（drawImage が向きを反映済みのため）。");
+      if (detail.iccDropped) notes.push("ICC プロファイルは canvas 出力が常に sRGB を吐くため引き継いでいません。");
+    } else if (detail.carryUnsupported) {
+      notes.push("この形式への再エンコードではメタデータは引き継げません。");
+    } else {
+      notes.push("サイズ・フォーマット段で再エンコード済みのため、この段では既にメタデータが失われています。");
+    }
+    return notes;
   }
-  if (!detail.toggleOn) return "トグルを切ったため、元のメタデータをそのまま保持します。";
-  if (detail.webpUnsupported) {
-    return "WebP の除去は未対応です（RIFF サイズと VP8X flags の再計算が必要で、安全にロスレス除去できないため）。";
+  if (detail.scan.strippable === false && detail.scan.segments.length > 0) {
+    notes.push("WebP の除去は未対応です（RIFF サイズと VP8X flags の再計算が必要で、安全にロスレス除去できないため）。編集内容は保持したまま元のバイト列を通します。");
+  } else if (detail.removedBytes > 0) {
+    notes.push("元ファイルのバイト列から、選んだセグメントのみをロスレスに読み飛ばして除去しました。");
   }
-  if (detail.strippedApplied) return "元ファイルのバイト列からメタデータセグメントのみをロスレスに読み飛ばして除去しました。";
-  return "";
+  if (detail.gpsRemoved && detail.scan.segments.some((s) => s.name === "APP1 Exif")) {
+    notes.push("GPS 情報は値をゼロ埋めし、IFD からたどれないようにしました。");
+  }
+  return notes;
+}
+
+/** メタデータノードの要約行（"\n" で複数行に積む。「·」区切りは使わない） */
+export function metadataSummaryLines(detail: MetadataStageDetail): string[] {
+  const exifSeg = detail.scan.segments.find((s) => s.name === "APP1 Exif");
+  if (detail.cameFromCanvas) {
+    if (detail.carried) {
+      return [exifSeg ? `Exif ${formatBytes(exifSeg.bytes)} を引き継ぎ（向き 1 に補正）` : "メタデータを引き継ぎ（向き 1 に補正）"];
+    }
+    if (detail.carryUnsupported) return ["この形式へは引き継げません"];
+    return ["再エンコードで除去済み"];
+  }
+  if (detail.scan.segments.length === 0) return ["メタデータなし"];
+  const lines = [`除去 ${formatBytes(detail.removedBytes)} / 保持 ${formatBytes(detail.keptBytes)}`];
+  if (detail.iccDropped) lines.push("ICC 除去");
+  return lines;
 }
 
 /** 出力ノードの寸法・形式・容量の情報テーブル */
