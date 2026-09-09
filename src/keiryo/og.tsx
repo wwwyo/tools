@@ -1,77 +1,87 @@
 // OGP カード用の画面ミニチュア。satori (OGP) と通常の React 描画 (デモページ) の両方から
 // 使われるため inline style のみ・display は flex のみで組む（本体の main.ts は変更しない）。
 //
-// 本体（src/keiryo/main.ts）は「サムネイル＋検品テーブル」のカードの下に、拡張子ごとの
-// 圧縮結果を横棒付きの一覧（梯子）で並べる。ミニチュアはそのうち一目でツールと分かる
-// 「梯子」側だけを抜き出して再現する。
-type LadderRow = {
+// 本体（src/keiryo/main.ts）は「元画像 → サイズ → フォーマット → メタデータ → 出力」の
+// 5ノードをポート付きのカードとして横に並べ、曲線のエッジで繋ぐノードフローエディタ風の
+// キャンバスを見せる。ミニチュアはヘッダー帯・ポート・エッジの太さという構造だけを
+// 抜き出して再現する（値の意味までは持たせない）。
+type PipelineNode = {
   label: string;
-  barPercent: number;
 };
 
-// 実物は「元ファイル / JPEG / WebP / AVIF / PNG」の5段。バー幅は実物同様、
-// 非可逆形式ほど短く、可逆の PNG は元ファイルに次いで長い比率バーを模す
-const LADDER_ROWS: LadderRow[] = [
-  { label: '元ファイル', barPercent: 100 },
-  { label: 'JPEG', barPercent: 42 },
-  { label: 'WebP', barPercent: 34 },
-  { label: 'AVIF', barPercent: 22 },
-  { label: 'PNG', barPercent: 88 },
+// 実物はエッジの太さがバイト数（元画像比）に比例して段を追うごとに細くなる。
+// ミニチュアでは同じ見た目を素の px 値で再現する（4本のエッジ = 5ノード間）
+const PIPELINE_NODES: PipelineNode[] = [
+  { label: '元画像' },
+  { label: 'サイズ' },
+  { label: 'フォーマット' },
+  { label: 'メタデータ' },
+  { label: '出力' },
 ];
 
-function ThumbnailBox() {
+const EDGE_WIDTHS = [5, 3.5, 2.5, 1.5];
+
+// ノード間を繋ぐ直線 + 太さで表現するエッジ。本体は曲線ベジェだが、
+// satori は矩形しか安定して描けないため、太さの変化だけを縮小して見せる
+function Edge({ width }: { width: number }) {
   return (
     <div
       style={{
         display: 'flex',
-        width: 96,
-        height: 72,
-        borderRadius: 6,
-        border: '1px solid rgba(140,133,123,0.35)',
-        backgroundColor: '#eee6d8',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 22,
         flexShrink: 0,
+      }}
+    >
+      <div style={{ display: 'flex', width: 18, height: width, borderRadius: width, backgroundColor: '#c73e2e', opacity: 0.7 }} />
+    </div>
+  );
+}
+
+function Port() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        border: '2px solid #c73e2e',
+        backgroundColor: '#fbfaf6',
       }}
     />
   );
 }
 
-function LadderRowView({ row }: { row: LadderRow }) {
+function PipelineNodeBox({ node, isFirst, isLast }: { node: PipelineNode; isFirst: boolean; isLast: boolean }) {
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center',
-        width: '100%',
-        gap: 14,
-        padding: '8px 14px',
+        flexDirection: 'column',
+        width: 108,
+        flexShrink: 0,
         borderRadius: 6,
         border: '1px solid rgba(140,133,123,0.35)',
         backgroundColor: '#fff',
+        overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', width: 84, fontSize: 14, fontWeight: 600, color: '#1f1b16' }}>
-        {row.label}
-      </div>
       <div
         style={{
           display: 'flex',
-          flex: 1,
-          height: 8,
-          borderRadius: 4,
+          padding: '8px 8px',
           backgroundColor: 'rgba(140,133,123,0.16)',
-          overflow: 'hidden',
+          fontSize: 14,
+          color: '#1f1b16',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            width: `${row.barPercent}%`,
-            height: '100%',
-            borderRadius: 4,
-            backgroundColor: '#c73e2e',
-          }}
-        />
+        {node.label}
+      </div>
+      <div style={{ display: 'flex', padding: '10px 8px', justifyContent: isFirst ? 'flex-end' : isLast ? 'flex-start' : 'space-between' }}>
+        {!isFirst ? <Port /> : null}
+        {!isLast ? <Port /> : null}
       </div>
     </div>
   );
@@ -88,33 +98,15 @@ export default function KeiryoOgPreview() {
         // カード側と同じ紙色。白にするとテキスト側との境目に段差が出て枠線のように見えてしまう
         backgroundColor: '#fbfaf6',
         padding: 40,
-        gap: 16,
         justifyContent: 'center',
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 16,
-          padding: 14,
-          borderRadius: 6,
-          border: '1px solid rgba(140,133,123,0.35)',
-          backgroundColor: '#fff',
-        }}
-      >
-        <ThumbnailBox />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', width: 220, height: 10, borderRadius: 3, backgroundColor: 'rgba(140,133,123,0.25)' }} />
-          <div style={{ display: 'flex', width: 160, height: 10, borderRadius: 3, backgroundColor: 'rgba(140,133,123,0.25)' }} />
-          <div style={{ display: 'flex', width: 190, height: 10, borderRadius: 3, backgroundColor: 'rgba(140,133,123,0.25)' }} />
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {LADDER_ROWS.map((row) => (
-          <LadderRowView key={row.label} row={row} />
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+        {PIPELINE_NODES.map((node, index) => (
+          <div key={node.label} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+            {index > 0 ? <Edge width={EDGE_WIDTHS[index - 1] ?? 1.5} /> : null}
+            <PipelineNodeBox node={node} isFirst={index === 0} isLast={index === PIPELINE_NODES.length - 1} />
+          </div>
         ))}
       </div>
     </div>

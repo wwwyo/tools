@@ -1,30 +1,31 @@
 import "../global.css";
 import "./styles.css";
+import { extractMetadata, formatBytes, loadImage, type ImageMeta } from "./imageMeta";
+import { detectFormatSupport, generateSampleFile, type ProbedFormat } from "./encode";
 import {
-  basenameNoExt,
-  extractMetadata,
-  formatBytes,
-  loadImage,
-  type ImageMeta,
-} from "./imageMeta";
-import {
-  detectFormatSupport,
-  encodeImage,
-  extensionFor,
-  generateSampleFile,
-  type OutputFormat,
-  type ProbedFormat,
-} from "./encode";
+  formatDelta,
+  isFormatSupported,
+  runPipeline,
+  buildOriginalDetailHtml,
+  buildLongEdgeOptionsHtml,
+  buildSizeInfoHtml,
+  buildFormatComparisonHtml,
+  buildMetadataSegmentsHtml,
+  metadataStatusText,
+  buildOutputInfoHtml,
+  type FormatChoice,
+  type PipelineResult,
+} from "./pipeline";
 
 const appEl = document.getElementById("app");
 if (!appEl) {
   throw new Error("app element not found");
 }
 
-const DESCRIPTION = "画像の圧縮率を拡張子ごとに比較します。";
+const DESCRIPTION = "画像の圧縮率を工程ごとに比較します。";
 
 appEl.innerHTML = `
-  <main class="mx-auto flex max-w-3xl flex-col gap-8 px-5 py-10">
+  <main class="mx-auto flex max-w-5xl flex-col gap-8 px-5 py-10">
     <header class="flex flex-col gap-1.5">
       <h1 class="text-2xl font-bold">ケイリョウ</h1>
       <p class="text-sm text-muted-foreground">${DESCRIPTION}</p>
@@ -51,38 +52,23 @@ appEl.innerHTML = `
       <p id="error" class="hidden text-sm text-destructive" role="alert"></p>
     </section>
 
-    <section id="result-section" class="hidden flex-col gap-6">
-      <div class="flex flex-col gap-4 rounded border border-border bg-card p-4 sm:flex-row">
-        <img
-          id="thumbnail"
-          alt="読み込んだ画像のサムネイル"
-          class="max-h-[140px] w-auto max-w-[200px] shrink-0 rounded border border-border object-contain"
-        />
-        <div id="meta-table" class="min-w-0 flex-1"></div>
-      </div>
-
-      <div class="flex flex-wrap items-center gap-4">
-        <label class="flex flex-1 items-center gap-2 text-xs text-muted-foreground">
+    <section id="result-section" class="hidden flex-col gap-4">
+      <div class="flex flex-wrap items-center gap-2 rounded border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+        <span class="font-semibold text-foreground">パラメータ</span>
+        <label class="flex flex-1 items-center gap-2">
           <span>品質</span>
           <input type="range" id="quality" min="0.3" max="1" step="0.05" value="0.8" class="w-full max-w-48 accent-primary" />
           <span id="quality-value" class="w-10 shrink-0 font-mono text-foreground">0.80</span>
         </label>
-        <label class="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>長辺の上限</span>
-          <select
-            id="long-edge"
-            class="rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-          >
-            <option value="">なし</option>
-            <option value="2048">2048px</option>
-            <option value="1600">1600px</option>
-            <option value="1200">1200px</option>
-            <option value="800">800px</option>
-          </select>
-        </label>
       </div>
 
-      <div id="ladder" class="flex flex-col gap-2"></div>
+      <div id="canvas" class="keiryo-canvas relative overflow-x-auto rounded border border-border">
+        <div id="canvas-content" class="keiryo-canvas-content relative">
+          <svg id="edges" class="keiryo-edges pointer-events-none absolute inset-0" aria-hidden="true"></svg>
+        </div>
+      </div>
+
+      <div id="detail-panel" class="flex flex-col gap-3 rounded border border-border bg-card p-4"></div>
     </section>
   </main>
 `;
@@ -92,69 +78,140 @@ const sampleButtonEl = document.getElementById("sample-button") as HTMLButtonEle
 const fileInputEl = document.getElementById("file-input") as HTMLInputElement;
 const errorEl = document.getElementById("error") as HTMLParagraphElement;
 const resultSectionEl = document.getElementById("result-section") as HTMLElement;
-const thumbnailEl = document.getElementById("thumbnail") as HTMLImageElement;
-const metaTableEl = document.getElementById("meta-table") as HTMLDivElement;
 const qualityInputEl = document.getElementById("quality") as HTMLInputElement;
 const qualityValueEl = document.getElementById("quality-value") as HTMLSpanElement;
-const longEdgeSelectEl = document.getElementById("long-edge") as HTMLSelectElement;
-const ladderEl = document.getElementById("ladder") as HTMLDivElement;
+const canvasEl = document.getElementById("canvas") as HTMLDivElement;
+const canvasContentEl = document.getElementById("canvas-content") as HTMLDivElement;
+const edgesSvgEl = document.getElementById("edges") as unknown as SVGSVGElement;
+const detailPanelEl = document.getElementById("detail-panel") as HTMLDivElement;
 
-/** ラダーに並べる出力形式。常にこの順で1行ずつ出す */
-const ROW_FORMATS: readonly OutputFormat[] = ["jpeg", "webp", "avif", "png"];
+type StageId = "original" | "size" | "format" | "metadata" | "output";
 
-const FORMAT_LABELS: Record<OutputFormat, string> = {
-  jpeg: "JPEG .jpg",
-  webp: "WebP .webp",
-  avif: "AVIF .avif",
-  png: "PNG .png",
+const STAGE_LABELS: Record<StageId, string> = {
+  original: "元画像",
+  size: "サイズ",
+  format: "フォーマット",
+  metadata: "メタデータ",
+  output: "出力",
 };
 
-/** ラダー1行の仕様。format が null の行だけは「元ファイル」で、再エンコードせず元のバイト列をそのまま扱う */
-interface RowSpec {
-  label: string;
-  format: OutputFormat | null;
+const STAGE_ORDER: readonly StageId[] = ["original", "size", "format", "metadata", "output"];
+
+// ノードの座標。x はキャンバス幅に応じて等間隔に広げ（最小間隔 184px を下回るときだけ横スクロール）、
+// y は各ノードの実測高さから都度センタリングする
+const NODE_START_X = 24;
+const NODE_MIN_STEP_X = 184;
+const NODE_WIDTH = 172;
+
+/** キャンバスの表示幅から、ノードの x 間隔とコンテンツ幅を決める */
+function computeNodeLayout(): { stepX: number; contentWidth: number } {
+  const available = canvasEl.clientWidth - NODE_START_X * 2 - NODE_WIDTH;
+  const stepX = Math.max(NODE_MIN_STEP_X, Math.floor(available / (STAGE_ORDER.length - 1)));
+  const contentWidth = NODE_START_X * 2 + NODE_WIDTH + stepX * (STAGE_ORDER.length - 1);
+  return { stepX, contentWidth };
 }
 
-/** ラダー1行の実行時状態（DOM 参照 + 直近のエンコード結果） */
-interface RowRuntime {
-  spec: RowSpec;
-  supported: boolean;
-  rowEl: HTMLDivElement;
+/** 全ノードの left とコンテンツ幅を現在のキャンバス幅に合わせて置き直す */
+function layoutNodes(): void {
+  const { stepX, contentWidth } = computeNodeLayout();
+  canvasContentEl.style.width = `${contentWidth}px`;
+  edgesSvgEl.setAttribute("width", String(contentWidth));
+  STAGE_ORDER.forEach((stageId, index) => {
+    const els = state.nodeEls[stageId];
+    if (els) els.rootEl.style.left = `${NODE_START_X + index * stepX}px`;
+  });
+}
+const EDGE_CURVE_OFFSET = 60;
+const EDGE_MIN_STROKE = 1.5;
+const EDGE_MAX_STROKE = 8;
+
+interface BaseNodeEls {
+  rootEl: HTMLDivElement;
+  headerEl: HTMLDivElement;
+  inputPortEl: HTMLDivElement | null;
+  outputPortEl: HTMLDivElement | null;
+}
+
+interface OriginalNodeEls extends BaseNodeEls {
+  thumbEl: HTMLImageElement;
+  summaryEl: HTMLSpanElement;
+}
+
+interface SizeNodeEls extends BaseNodeEls {
+  selectEl: HTMLSelectElement;
   dimsEl: HTMLSpanElement;
-  sizeEl: HTMLSpanElement;
+}
+
+interface FormatNodeEls extends BaseNodeEls {
+  selectEl: HTMLSelectElement;
+  qualityEl: HTMLSpanElement;
+}
+
+interface MetadataNodeEls extends BaseNodeEls {
+  checkboxEl: HTMLInputElement;
+  summaryEl: HTMLSpanElement;
+}
+
+interface OutputNodeEls extends BaseNodeEls {
+  bytesEl: HTMLSpanElement;
   deltaEl: HTMLSpanElement;
-  statusEl: HTMLSpanElement;
-  barTrackEl: HTMLDivElement;
-  barFillEl: HTMLDivElement;
-  downloadButtonEl: HTMLButtonElement;
-  size: number | null;
-  width: number | null;
-  height: number | null;
-  objectUrl: string | null;
-  downloadName: string | null;
+  downloadEl: HTMLAnchorElement;
+}
+
+interface NodeElsMap {
+  original?: OriginalNodeEls;
+  size?: SizeNodeEls;
+  format?: FormatNodeEls;
+  metadata?: MetadataNodeEls;
+  output?: OutputNodeEls;
+}
+
+interface EdgeEls {
+  pathEl: SVGPathElement;
+  labelEl: HTMLSpanElement;
+  bytesTextEl: HTMLSpanElement;
+  deltaTextEl: HTMLSpanElement;
 }
 
 interface AppState {
   file: File | null;
   objectUrl: string | null;
+  originalArrayBuffer: ArrayBuffer | null;
   image: HTMLImageElement | null;
   meta: ImageMeta | null;
   quality: number;
   longEdgeCap: number | null;
-  rows: RowRuntime[];
+  formatChoice: FormatChoice;
+  stripMetadataEnabled: boolean;
+  activeStage: StageId;
+  pipeline: PipelineResult | null;
+  support: Record<ProbedFormat, boolean> | null;
+  computing: boolean;
+  outputObjectUrl: string | null;
+  nodeEls: NodeElsMap;
+  edgeEls: EdgeEls[];
 }
 
 const state: AppState = {
   file: null,
   objectUrl: null,
+  originalArrayBuffer: null,
   image: null,
   meta: null,
   quality: 0.8,
   longEdgeCap: null,
-  rows: [],
+  formatChoice: "original",
+  stripMetadataEnabled: true,
+  activeStage: "original",
+  pipeline: null,
+  support: null,
+  computing: false,
+  outputObjectUrl: null,
+  nodeEls: {},
+  edgeEls: [],
 };
 
-// ブラウザの書き出し対応可否は起動直後に一度だけ probe する。1×1 canvas での判定なので実質同期に近い速さで解決する
+// ブラウザの書き出し対応可否は起動直後に一度だけ probe する
 const supportPromise: Promise<Record<ProbedFormat, boolean>> = detectFormatSupport();
 
 function showError(message: string): void {
@@ -167,310 +224,562 @@ function clearError(): void {
   errorEl.classList.add("hidden");
 }
 
-function buildMetaRowsHtml(m: ImageMeta): string {
-  const rows: [string, string][] = [
-    ["ファイル名", m.fileName],
-    ["拡張子", `.${m.ext}`],
-    ["実際の形式", m.sniffedFormat],
-    ["MIME", m.mime],
-    ["容量", `${formatBytes(m.bytes)} (${m.bytes.toLocaleString("ja-JP")} B)`],
-    ["寸法", `${m.width} × ${m.height} px`],
-    ["画素数", `${m.megapixels} MP`],
-    ["アスペクト比", `${m.ratioInt} (${m.ratioDec})`],
-    ["最終更新", m.lastModified],
-    ["透過の有無", m.hasAlpha === null ? "判定不可" : m.hasAlpha ? "あり" : "なし"],
-    ["色深度", m.bitInfo],
-    ["EXIF向き", m.exifOrientation],
-  ];
-  const rowsHtml = rows
-    .map(
-      ([label, value]) =>
-        `<div class="flex items-baseline justify-between gap-3 border-b border-border/60 py-1.5 text-sm last:border-b-0">` +
-        `<span class="text-muted-foreground">${label}</span>` +
-        `<span class="font-mono text-xs text-foreground">${value}</span>` +
-        `</div>`,
-    )
-    .join("");
-  const warningHtml = m.mismatch
-    ? `<div class="flex items-baseline justify-between gap-3 py-1.5 text-sm">` +
-      `<span class="text-destructive">警告</span>` +
-      `<span class="text-xs text-destructive">拡張子(${m.extFormat})と実形式(${m.sniffedFormat})が不一致</span>` +
-      `</div>`
-    : "";
-  return rowsHtml + warningHtml;
+/** クリック/キー操作がノード内のコントロール（select・input・button・a）由来かどうか */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.closest("select, input, button, a, label") !== null;
 }
 
-function buildRowSpecs(): RowSpec[] {
-  return [
-    { label: "元ファイル", format: null },
-    ...ROW_FORMATS.map((format) => ({ label: FORMAT_LABELS[format], format })),
-  ];
+const FORMAT_SELECT_CHOICES: readonly { value: FormatChoice; label: string }[] = [
+  { value: "original", label: "元のまま" },
+  { value: "jpeg", label: "JPEG" },
+  { value: "webp", label: "WebP" },
+  { value: "png", label: "PNG" },
+  { value: "avif", label: "AVIF" },
+];
+
+function buildFormatSelectOptions(support: Record<ProbedFormat, boolean>, current: FormatChoice): string {
+  return FORMAT_SELECT_CHOICES.map((choice) => {
+    const supported = choice.value === "original" || isFormatSupported(choice.value, support);
+    const selected = choice.value === current;
+    return `<option value="${choice.value}"${supported ? "" : " disabled"}${selected ? " selected" : ""}>${choice.label}${
+      supported ? "" : "（書き出し不可）"
+    }</option>`;
+  }).join("");
 }
 
-/** JPEG・PNG は常にブラウザが書き出せる前提とし、probe 対象は非可逆の WebP / AVIF のみ */
-function isFormatSupported(format: OutputFormat, support: Record<ProbedFormat, boolean>): boolean {
-  if (format === "jpeg" || format === "png") return true;
-  return support[format as ProbedFormat] ?? false;
+function createPort(side: "left" | "right"): HTMLDivElement {
+  const portEl = document.createElement("div");
+  portEl.className = "keiryo-port absolute size-2.5 rounded-full border-2 border-primary bg-background";
+  portEl.style.top = "50%";
+  portEl.style.transform = "translateY(-50%)";
+  portEl.style[side] = "-5px";
+  portEl.setAttribute("aria-hidden", "true");
+  return portEl;
 }
 
-function formatDelta(size: number | null, originalBytes: number): string {
-  if (size == null) return "±0%";
-  const delta = Math.round((1 - size / originalBytes) * 100);
-  if (delta === 0) return "±0%";
-  return delta > 0 ? `−${delta}%` : `+${Math.abs(delta)}%`;
-}
+/** ノード共通の外枠（ヘッダー・ポート・選択操作）を組み立て、body 要素だけ呼び出し側に渡す */
+function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElement; headerEl: HTMLDivElement; bodyEl: HTMLDivElement; inputPortEl: HTMLDivElement | null; outputPortEl: HTMLDivElement | null } {
+  const rootEl = document.createElement("div");
+  rootEl.id = `keiryo-node-${stageId}`;
+  rootEl.className =
+    "keiryo-node absolute flex flex-col overflow-hidden rounded border border-border bg-card shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring";
+  rootEl.style.width = `${NODE_WIDTH}px`;
+  rootEl.style.setProperty("--row-index", String(index));
+  rootEl.setAttribute("role", "button");
+  rootEl.setAttribute("aria-controls", "detail-panel");
+  rootEl.setAttribute("aria-pressed", "false");
+  rootEl.tabIndex = -1;
 
-function createRow(spec: RowSpec, index: number, supported: boolean): RowRuntime {
-  const rowEl = document.createElement("div");
-  rowEl.className =
-    "keiryo-row flex flex-col gap-1 rounded border border-border bg-card px-4 py-2.5";
-  rowEl.style.setProperty("--row-index", String(index));
-  rowEl.innerHTML = `
-    <div class="flex flex-wrap items-center gap-3">
-      <span class="row-label w-28 shrink-0 text-sm font-semibold text-foreground">${spec.label}</span>
-      <span class="row-dims w-28 shrink-0 font-mono text-xs text-muted-foreground">—</span>
-      <span class="row-size w-20 shrink-0 font-mono text-xs text-muted-foreground">—</span>
-      <span class="row-delta w-14 shrink-0 font-mono text-xs font-semibold text-primary">±0%</span>
-      <span class="row-status hidden shrink-0 text-xs text-muted-foreground">変換中…</span>
-      <span class="row-unsupported hidden shrink-0 text-xs text-muted-foreground">このブラウザでは書き出し不可</span>
-      <div class="row-bar-track h-2 min-w-24 flex-1 overflow-hidden rounded-full bg-muted">
-        <div class="row-bar-fill keiryo-bar-fill h-full w-full rounded-full bg-primary" style="transform: scaleX(0);"></div>
-      </div>
-      <button
-        type="button"
-        class="row-download shrink-0 rounded border border-border px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring"
-        disabled
-      >ダウンロード</button>
-    </div>
-    <p class="row-note hidden pl-1 text-xs text-muted-foreground">可逆・品質は効きません</p>
-  `;
+  const headerEl = document.createElement("div");
+  headerEl.className = "keiryo-node-header bg-muted px-2 py-1 text-xs font-semibold text-foreground";
+  headerEl.textContent = STAGE_LABELS[stageId];
 
-  const downloadButtonEl = rowEl.querySelector(".row-download") as HTMLButtonElement;
-  const row: RowRuntime = {
-    spec,
-    supported,
-    rowEl,
-    dimsEl: rowEl.querySelector(".row-dims") as HTMLSpanElement,
-    sizeEl: rowEl.querySelector(".row-size") as HTMLSpanElement,
-    deltaEl: rowEl.querySelector(".row-delta") as HTMLSpanElement,
-    statusEl: rowEl.querySelector(".row-status") as HTMLSpanElement,
-    barTrackEl: rowEl.querySelector(".row-bar-track") as HTMLDivElement,
-    barFillEl: rowEl.querySelector(".row-bar-fill") as HTMLDivElement,
-    downloadButtonEl,
-    size: null,
-    width: null,
-    height: null,
-    objectUrl: null,
-    downloadName: null,
-  };
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "flex flex-col gap-1.5 p-2 text-xs";
 
-  if (spec.format === "png") {
-    (rowEl.querySelector(".row-note") as HTMLParagraphElement).classList.remove("hidden");
-  }
+  rootEl.append(headerEl, bodyEl);
 
-  if (!supported) {
-    const unsupportedEl = rowEl.querySelector(".row-unsupported") as HTMLSpanElement;
-    unsupportedEl.classList.remove("hidden");
-    row.dimsEl.classList.add("hidden");
-    row.sizeEl.classList.add("hidden");
-    row.deltaEl.classList.add("hidden");
-    row.barTrackEl.classList.add("hidden");
-    row.downloadButtonEl.classList.add("hidden");
-  }
+  const inputPortEl = stageId === "original" ? null : createPort("left");
+  const outputPortEl = stageId === "output" ? null : createPort("right");
+  if (inputPortEl) rootEl.append(inputPortEl);
+  if (outputPortEl) rootEl.append(outputPortEl);
 
-  downloadButtonEl.addEventListener("click", () => {
-    if (!row.objectUrl || !row.downloadName) return;
-    const anchor = document.createElement("a");
-    anchor.href = row.objectUrl;
-    anchor.download = row.downloadName;
-    anchor.click();
+  rootEl.addEventListener("click", (event) => {
+    if (isInteractiveTarget(event.target)) return;
+    setActiveStage(stageId);
+    rootEl.focus();
+  });
+  rootEl.addEventListener("keydown", (event) => {
+    if (event.target !== rootEl) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setActiveStage(stageId);
+    }
   });
 
-  return row;
+  return { rootEl, headerEl, bodyEl, inputPortEl, outputPortEl };
 }
 
-function setRowBusy(row: RowRuntime, busy: boolean): void {
-  row.rowEl.classList.toggle("opacity-50", busy);
-  row.statusEl.classList.toggle("hidden", !busy);
+/** ノード5枚とエッジ4本を1回だけ生成する（画像読み込みごとに1回。以降の再計算は中身の更新のみ） */
+function buildPipelineNodes(meta: ImageMeta, support: Record<ProbedFormat, boolean>): void {
+  canvasContentEl.querySelectorAll(".keiryo-node").forEach((el) => el.remove());
+  canvasContentEl.querySelectorAll(".keiryo-edge-label").forEach((el) => el.remove());
+  state.nodeEls = {};
+  state.edgeEls = [];
+
+  STAGE_ORDER.forEach((stageId, index) => {
+    const shell = createNodeShell(stageId, index);
+
+    switch (stageId) {
+      case "original": {
+        const thumbEl = document.createElement("img");
+        thumbEl.alt = "";
+        thumbEl.className = "max-h-14 w-fit rounded border border-border object-contain";
+        const summaryEl = document.createElement("span");
+        summaryEl.className = "font-mono text-muted-foreground";
+        shell.bodyEl.append(thumbEl, summaryEl);
+        state.nodeEls.original = { ...shell, thumbEl, summaryEl };
+        break;
+      }
+      case "size": {
+        const selectEl = document.createElement("select");
+        selectEl.className = "w-full rounded border border-border bg-background px-1.5 py-1 text-foreground";
+        selectEl.setAttribute("aria-label", "長辺の上限");
+        selectEl.innerHTML = buildLongEdgeOptionsHtml(meta, state.longEdgeCap);
+        selectEl.addEventListener("change", () => {
+          state.longEdgeCap = selectEl.value ? Number.parseInt(selectEl.value, 10) : null;
+          scheduleRecompute();
+        });
+        const dimsEl = document.createElement("span");
+        dimsEl.className = "font-mono text-muted-foreground";
+        shell.bodyEl.append(selectEl, dimsEl);
+        state.nodeEls.size = { ...shell, selectEl, dimsEl };
+        break;
+      }
+      case "format": {
+        const selectEl = document.createElement("select");
+        selectEl.className = "w-full rounded border border-border bg-background px-1.5 py-1 text-foreground";
+        selectEl.setAttribute("aria-label", "出力形式");
+        selectEl.innerHTML = buildFormatSelectOptions(support, state.formatChoice);
+        selectEl.addEventListener("change", () => {
+          state.formatChoice = selectEl.value as FormatChoice;
+          scheduleRecompute();
+        });
+        const qualityEl = document.createElement("span");
+        qualityEl.className = "font-mono text-muted-foreground";
+        shell.bodyEl.append(selectEl, qualityEl);
+        state.nodeEls.format = { ...shell, selectEl, qualityEl };
+        break;
+      }
+      case "metadata": {
+        const labelEl = document.createElement("label");
+        labelEl.className = "flex items-center gap-1.5";
+        const checkboxEl = document.createElement("input");
+        checkboxEl.type = "checkbox";
+        checkboxEl.checked = state.stripMetadataEnabled;
+        checkboxEl.className = "accent-primary";
+        checkboxEl.addEventListener("change", () => {
+          state.stripMetadataEnabled = checkboxEl.checked;
+          scheduleRecompute();
+        });
+        const checkboxLabelEl = document.createElement("span");
+        checkboxLabelEl.textContent = "除去する";
+        labelEl.append(checkboxEl, checkboxLabelEl);
+        const summaryEl = document.createElement("span");
+        summaryEl.className = "font-mono text-muted-foreground";
+        shell.bodyEl.append(labelEl, summaryEl);
+        state.nodeEls.metadata = { ...shell, checkboxEl, summaryEl };
+        break;
+      }
+      case "output": {
+        const bytesEl = document.createElement("span");
+        bytesEl.className = "font-mono text-base font-semibold text-foreground";
+        const deltaEl = document.createElement("span");
+        deltaEl.className = "font-mono font-semibold text-primary";
+        const downloadEl = document.createElement("a");
+        downloadEl.className =
+          "inline-flex w-fit items-center gap-1 rounded border border-primary bg-primary px-2 py-1 font-semibold text-primary-foreground transition-colors hover:opacity-90";
+        downloadEl.href = "#";
+        downloadEl.textContent = "ダウンロード";
+        shell.bodyEl.append(bytesEl, deltaEl, downloadEl);
+        state.nodeEls.output = { ...shell, bytesEl, deltaEl, downloadEl };
+        break;
+      }
+    }
+
+    canvasContentEl.append(shell.rootEl);
+  });
+
+  layoutNodes();
+  // y はノードごとの実測高さからセンタリングする（transform だと offsetTop がずれ、ポート座標計算が狂うため）
+  const canvasHeight = canvasEl.clientHeight;
+  for (const stageId of STAGE_ORDER) {
+    const els = state.nodeEls[stageId];
+    if (!els) continue;
+    els.rootEl.style.top = `${Math.max(0, Math.round((canvasHeight - els.rootEl.offsetHeight) / 2))}px`;
+  }
+
+  for (let i = 0; i < STAGE_ORDER.length - 1; i++) {
+    const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    pathEl.setAttribute("class", "keiryo-edge");
+    edgesSvgEl.append(pathEl);
+
+    const labelEl = document.createElement("span");
+    labelEl.className =
+      "keiryo-edge-label rounded border border-border bg-card px-1 py-0.5 font-mono text-xs text-foreground";
+    const bytesTextEl = document.createElement("span");
+    const deltaTextEl = document.createElement("span");
+    deltaTextEl.className = "ml-1 text-primary";
+    labelEl.append(bytesTextEl, deltaTextEl);
+    canvasContentEl.append(labelEl);
+
+    state.edgeEls.push({ pathEl, labelEl, bytesTextEl, deltaTextEl });
+  }
+
+  canvasContentEl.addEventListener("keydown", handleCanvasKeydown);
 }
 
-/** 全行の現在サイズ（未計算行は元ファイルのバイト数で仮置き）から比率バーを再計算する */
-function recomputeBars(): void {
+function handleCanvasKeydown(event: KeyboardEvent): void {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("keiryo-node")) return;
+  const currentIndex = STAGE_ORDER.indexOf(state.activeStage);
+  const nextIndex =
+    event.key === "ArrowRight"
+      ? Math.min(STAGE_ORDER.length - 1, currentIndex + 1)
+      : Math.max(0, currentIndex - 1);
+  const nextStage = STAGE_ORDER[nextIndex];
+  if (!nextStage || nextStage === state.activeStage) return;
+  event.preventDefault();
+  setActiveStage(nextStage);
+  state.nodeEls[nextStage]?.rootEl.focus();
+}
+
+/** ノードの選択状態（ヘッダー配色・枠線・roving tabindex）を切り替え、詳細パネルを描画し直す */
+function setActiveStage(stageId: StageId): void {
+  state.activeStage = stageId;
+  for (const id of STAGE_ORDER) {
+    const els = state.nodeEls[id];
+    if (!els) continue;
+    const active = id === stageId;
+    els.rootEl.setAttribute("aria-pressed", String(active));
+    els.rootEl.tabIndex = active ? 0 : -1;
+    els.rootEl.classList.toggle("border-primary", active);
+    els.rootEl.classList.toggle("shadow", active);
+    els.headerEl.classList.toggle("bg-primary", active);
+    els.headerEl.classList.toggle("text-primary-foreground", active);
+    els.headerEl.classList.toggle("bg-muted", !active);
+    els.headerEl.classList.toggle("text-foreground", !active);
+  }
+  renderDetailPanel();
+}
+
+/** 原本比に応じたエッジの太さ（min 1.5 / max 8） */
+function edgeStrokeWidth(bytes: number, originalBytes: number): number {
+  const ratio = originalBytes > 0 ? bytes / originalBytes : 0;
+  const width = EDGE_MIN_STROKE + ratio * (EDGE_MAX_STROKE - EDGE_MIN_STROKE);
+  return Math.min(EDGE_MAX_STROKE, Math.max(EDGE_MIN_STROKE, width));
+}
+
+/** ノードの実測 DOM 矩形からエッジのベジェ曲線とラベル位置を引き直す */
+function layoutEdges(): void {
+  const canvasHeight = canvasEl.clientHeight;
+  edgesSvgEl.setAttribute("height", String(canvasHeight));
+
+  for (let i = 0; i < state.edgeEls.length; i++) {
+    const fromStage = STAGE_ORDER[i];
+    const toStage = STAGE_ORDER[i + 1];
+    const edge = state.edgeEls[i];
+    const fromEls = fromStage ? state.nodeEls[fromStage] : undefined;
+    const toEls = toStage ? state.nodeEls[toStage] : undefined;
+    if (!edge || !fromEls?.outputPortEl || !toEls?.inputPortEl) continue;
+
+    const p1x = fromEls.rootEl.offsetLeft + fromEls.outputPortEl.offsetLeft + fromEls.outputPortEl.offsetWidth / 2;
+    const p1y = fromEls.rootEl.offsetTop + fromEls.outputPortEl.offsetTop + fromEls.outputPortEl.offsetHeight / 2;
+    const p2x = toEls.rootEl.offsetLeft + toEls.inputPortEl.offsetLeft + toEls.inputPortEl.offsetWidth / 2;
+    const p2y = toEls.rootEl.offsetTop + toEls.inputPortEl.offsetTop + toEls.inputPortEl.offsetHeight / 2;
+
+    edge.pathEl.setAttribute(
+      "d",
+      `M ${p1x} ${p1y} C ${p1x + EDGE_CURVE_OFFSET} ${p1y}, ${p2x - EDGE_CURVE_OFFSET} ${p2y}, ${p2x} ${p2y}`,
+    );
+
+    // 3次ベジェの t=0.5 は y1=y2 のとき単純な中点に一致する
+    const midX = (p1x + p2x) / 2;
+    const midY = (p1y + p2y) / 2;
+    edge.labelEl.style.left = `${midX}px`;
+    edge.labelEl.style.top = `${midY}px`;
+  }
+}
+
+/** エッジの太さ・ラベル・流れアニメーションをパイプライン結果から更新する */
+function styleEdges(): void {
   const meta = state.meta;
   if (!meta) return;
-  const sizes = state.rows.map((row) => row.size ?? meta.bytes);
-  const maxSize = Math.max(meta.bytes, ...sizes);
-  state.rows.forEach((row, i) => {
-    if (!row.supported) return;
-    const size = sizes[i] ?? meta.bytes;
-    const scale = maxSize > 0 ? size / maxSize : 0;
-    row.barFillEl.style.transform = `scaleX(${scale})`;
+  const pipeline = state.pipeline;
+
+  const edgeBytes: { bytes: number; prevBytes: number }[] = pipeline
+    ? [
+        { bytes: pipeline.size.output.bytes, prevBytes: meta.bytes },
+        { bytes: pipeline.format.output.bytes, prevBytes: pipeline.size.output.bytes },
+        { bytes: pipeline.metadata.output.bytes, prevBytes: pipeline.format.output.bytes },
+        { bytes: pipeline.output.output.bytes, prevBytes: pipeline.metadata.output.bytes },
+      ]
+    : [];
+
+  state.edgeEls.forEach((edge, index) => {
+    const entry = edgeBytes[index];
+    const width = entry ? edgeStrokeWidth(entry.bytes, meta.bytes) : EDGE_MIN_STROKE;
+    edge.pathEl.setAttribute("stroke-width", width.toFixed(2));
+    edge.pathEl.classList.toggle("is-animating", state.computing);
+
+    if (entry) {
+      edge.bytesTextEl.textContent = formatBytes(entry.bytes);
+      const delta = formatDelta(entry.bytes, entry.prevBytes);
+      edge.deltaTextEl.textContent = delta === "±0%" ? "" : delta;
+    } else {
+      edge.bytesTextEl.textContent = "—";
+      edge.deltaTextEl.textContent = "";
+    }
   });
 }
 
-function applyRowResult(
-  row: RowRuntime,
-  data: { width: number; height: number; size: number; objectUrl: string; downloadName: string },
-): void {
+function updateOriginalNode(): void {
   const meta = state.meta;
-  if (!meta) return;
-  row.width = data.width;
-  row.height = data.height;
-  row.size = data.size;
-  row.objectUrl = data.objectUrl;
-  row.downloadName = data.downloadName;
-
-  row.dimsEl.textContent = `${data.width}×${data.height}`;
-  row.sizeEl.textContent = formatBytes(data.size);
-  row.deltaEl.textContent = formatDelta(data.size, meta.bytes);
-  row.downloadButtonEl.disabled = false;
-  recomputeBars();
+  const els = state.nodeEls.original;
+  if (!meta || !els) return;
+  if (state.objectUrl) els.thumbEl.src = state.objectUrl;
+  els.summaryEl.textContent = `${meta.width}×${meta.height} · ${meta.sniffedFormat} · ${formatBytes(meta.bytes)}`;
 }
 
-/** 元ファイル行は再エンコードせず、読み込み時に一度だけ確定値を反映する */
-function applyOriginalFileRow(row: RowRuntime): void {
+function updateSizeNode(): void {
+  const els = state.nodeEls.size;
+  if (!els) return;
+  const pipeline = state.pipeline;
+  els.dimsEl.textContent = state.computing
+    ? "計算中…"
+    : pipeline
+      ? `${pipeline.size.detail.afterWidth}×${pipeline.size.detail.afterHeight}`
+      : "—";
+}
+
+function updateFormatNode(): void {
+  const els = state.nodeEls.format;
+  if (!els) return;
+  els.qualityEl.textContent = `品質 ${state.quality.toFixed(2)}`;
+}
+
+function updateMetadataNode(): void {
+  const els = state.nodeEls.metadata;
+  if (!els) return;
+  const pipeline = state.pipeline;
+  if (state.computing || !pipeline) {
+    els.summaryEl.textContent = "計算中…";
+    return;
+  }
+  const d = pipeline.metadata.detail;
+  els.summaryEl.textContent = d.cameFromCanvas
+    ? "再エンコードで除去済み"
+    : `Exif など ${formatBytes(d.scan.totalBytes)}`;
+}
+
+function updateOutputNode(): void {
+  const els = state.nodeEls.output;
+  const meta = state.meta;
+  if (!els || !meta) return;
+  const pipeline = state.pipeline;
+  if (state.computing || !pipeline) {
+    els.bytesEl.textContent = "計算中…";
+    els.deltaEl.textContent = "";
+    els.downloadEl.classList.add("pointer-events-none", "opacity-50");
+    return;
+  }
+  els.downloadEl.classList.remove("pointer-events-none", "opacity-50");
+  els.bytesEl.textContent = formatBytes(pipeline.output.output.bytes);
+  els.deltaEl.textContent = formatDelta(pipeline.output.output.bytes, meta.bytes);
+  els.downloadEl.href = state.outputObjectUrl ?? "#";
+  els.downloadEl.download = pipeline.output.detail.downloadName;
+}
+
+/** ノード本文・エッジの太さ/ラベル・レイアウトをまとめて更新する（要素は作り直さない） */
+function renderNodes(): void {
+  if (!state.meta) return;
+  updateOriginalNode();
+  updateSizeNode();
+  updateFormatNode();
+  updateMetadataNode();
+  updateOutputNode();
+  styleEdges();
+  layoutEdges();
+
+  for (const id of STAGE_ORDER) {
+    state.nodeEls[id]?.rootEl.classList.toggle("opacity-60", state.computing);
+  }
+}
+
+// --- 詳細パネル -------------------------------------------------------------
+// マークアップの組み立ては pipeline.ts の build*Html / *StatusText 関数に寄せ、
+// ここでは innerHTML への反映（＝ DOM 固有の処理）だけを担う。操作系のコントロールは
+// すべてノード本体に移設済みのため、詳細パネル側にイベント登録は不要。
+
+function renderOriginalDetail(): void {
   const meta = state.meta;
   if (!meta || !state.objectUrl) return;
-  applyRowResult(row, {
-    width: meta.width,
-    height: meta.height,
-    size: meta.bytes,
-    objectUrl: state.objectUrl,
-    downloadName: meta.fileName,
-  });
+  detailPanelEl.innerHTML = `
+    <div class="flex flex-col gap-4 sm:flex-row">
+      <img
+        src="${state.objectUrl}"
+        alt="読み込んだ画像のサムネイル"
+        class="max-h-[140px] w-auto max-w-[200px] shrink-0 rounded border border-border object-contain"
+      />
+      <div class="min-w-0 flex-1">${buildOriginalDetailHtml(meta)}</div>
+    </div>
+  `;
 }
 
-/** 1行分の再エンコードを実行し、完了次第 UI へ反映する（前回の object URL は失効させてから差し替える） */
-async function encodeRow(row: RowRuntime): Promise<void> {
+function renderSizeDetail(): void {
+  const meta = state.meta;
+  const pipeline = state.pipeline;
+  if (!meta) return;
+  detailPanelEl.innerHTML = pipeline
+    ? `<div class="flex flex-col gap-1.5 text-sm">${buildSizeInfoHtml(meta, pipeline.size.detail, pipeline.size.output.bytes)}</div>`
+    : `<p class="text-xs text-muted-foreground">計算中…</p>`;
+}
+
+function renderFormatDetail(): void {
+  const pipeline = state.pipeline;
+  if (!pipeline) {
+    detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
+    return;
+  }
+  detailPanelEl.innerHTML = `
+    <div class="flex flex-col">${buildFormatComparisonHtml(pipeline.format.detail.comparison)}</div>
+    ${pipeline.format.detail.qualityIgnored ? `<p class="text-xs text-muted-foreground">PNG は可逆圧縮のため品質は効きません。</p>` : ""}
+  `;
+}
+
+function renderMetadataDetail(): void {
+  const pipeline = state.pipeline;
+  if (!pipeline) {
+    detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
+    return;
+  }
+  const d = pipeline.metadata.detail;
+  detailPanelEl.innerHTML = `
+    <div class="flex items-baseline justify-between gap-3 border-b border-border py-1.5 text-sm">
+      <span class="font-semibold text-foreground">メタデータ合計</span>
+      <span class="font-mono text-xs text-foreground">${formatBytes(d.scan.totalBytes)}</span>
+    </div>
+    <div class="flex flex-col">${buildMetadataSegmentsHtml(d.scan)}</div>
+    <p class="text-xs text-muted-foreground">${metadataStatusText(d)}</p>
+  `;
+}
+
+function renderOutputDetail(): void {
+  const meta = state.meta;
+  const pipeline = state.pipeline;
+  if (!meta || !pipeline || !state.objectUrl || !state.outputObjectUrl) {
+    detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
+    return;
+  }
+  const d = pipeline.output.detail;
+  detailPanelEl.innerHTML = `
+    <div class="flex flex-col gap-1.5 text-sm">${buildOutputInfoHtml(d)}</div>
+    <div class="flex flex-col gap-1.5">
+      <span class="text-xs font-semibold text-muted-foreground">元と比べる</span>
+      <div class="flex flex-wrap gap-3">
+        <img src="${state.objectUrl}" alt="変換前" class="max-h-[240px] w-auto max-w-[45%] rounded border border-border object-contain" />
+        <img src="${state.outputObjectUrl}" alt="変換後" class="max-h-[240px] w-auto max-w-[45%] rounded border border-border object-contain" />
+      </div>
+    </div>
+  `;
+}
+
+function renderDetailPanel(): void {
+  switch (state.activeStage) {
+    case "original":
+      renderOriginalDetail();
+      break;
+    case "size":
+      renderSizeDetail();
+      break;
+    case "format":
+      renderFormatDetail();
+      break;
+    case "metadata":
+      renderMetadataDetail();
+      break;
+    case "output":
+      renderOutputDetail();
+      break;
+  }
+}
+
+function revokeOutputObjectUrl(): void {
+  if (state.outputObjectUrl) {
+    URL.revokeObjectURL(state.outputObjectUrl);
+    state.outputObjectUrl = null;
+  }
+}
+
+/** 出力 blob の object URL をパイプライン結果ごとに作り直す（ノードのダウンロードボタンと詳細パネルの両方が使う） */
+function updateOutputObjectUrl(): void {
+  revokeOutputObjectUrl();
+  if (state.pipeline) {
+    state.outputObjectUrl = URL.createObjectURL(state.pipeline.output.output.blob);
+  }
+}
+
+// --- パイプライン実行 ---------------------------------------------------------
+
+let pipelineRunning = false;
+let rerunRequested = false;
+
+async function runPipelineOnce(): Promise<void> {
   const meta = state.meta;
   const image = state.image;
-  if (!meta || !image || !row.spec.format) return;
-  setRowBusy(row, true);
+  const file = state.file;
+  const originalArrayBuffer = state.originalArrayBuffer;
+  if (!meta || !image || !file || !originalArrayBuffer) return;
+
+  const support = state.support ?? (await supportPromise);
+  state.support = support;
+  // await 中に画像が差し替えられていたら、古い meta に対する計算結果は捨てる
+  if (state.meta !== meta) return;
+
   try {
-    const result = await encodeImage(image, {
-      format: row.spec.format,
+    const result = await runPipeline({
+      file,
+      meta,
+      image,
+      originalArrayBuffer,
       quality: state.quality,
       longEdgeCap: state.longEdgeCap,
+      formatChoice: state.formatChoice,
+      stripMetadataEnabled: state.stripMetadataEnabled,
+      support,
     });
-    const staleObjectUrl = row.objectUrl;
-    const objectUrl = URL.createObjectURL(result.blob);
-    applyRowResult(row, {
-      width: result.width,
-      height: result.height,
-      size: result.blob.size,
-      objectUrl,
-      downloadName: `${basenameNoExt(meta.fileName)}.${extensionFor(row.spec.format)}`,
-    });
-    // 差し替え後に失効させる。差し替え前に revoke すると、描画中の別行のダウンロードリンクへ影響しうるため
-    if (staleObjectUrl) URL.revokeObjectURL(staleObjectUrl);
+    if (state.meta !== meta) return;
+    state.pipeline = result;
   } catch (error) {
     console.error(error);
     showError("画像の変換に失敗しました。別の画像やパラメータで試してください。");
-  } finally {
-    setRowBusy(row, false);
   }
 }
 
-let encodeRunning = false;
-let rerunRequested = false;
-
-/**
- * 全ラダー行を直列に再エンコードする。巨大な画像で複数行分の canvas を同時確保すると
- * メモリを食い荒らすため、Promise.all にせず1行ずつ await する。
- * 実行中に品質・長辺上限が変わった場合は直後にもう一度だけやり直す（in-flight の直列化）。
- */
-async function runLadderOnce(): Promise<void> {
-  for (const row of state.rows) {
-    if (!row.spec.format || !row.supported) continue;
-    await encodeRow(row);
-  }
-}
-
-async function runLadder(): Promise<void> {
-  if (encodeRunning) {
+async function runPipelineLoop(): Promise<void> {
+  if (pipelineRunning) {
     rerunRequested = true;
     return;
   }
-  encodeRunning = true;
+  pipelineRunning = true;
+  state.computing = true;
+  renderNodes();
   try {
     do {
       rerunRequested = false;
-      await runLadderOnce();
+      await runPipelineOnce();
     } while (rerunRequested);
   } finally {
-    encodeRunning = false;
+    pipelineRunning = false;
+    state.computing = false;
+    updateOutputObjectUrl();
+    renderNodes();
+    renderDetailPanel();
   }
 }
 
 const DEBOUNCE_MS = 150;
 let debounceHandle: ReturnType<typeof setTimeout> | undefined;
 
-function scheduleLadder(): void {
+function scheduleRecompute(): void {
   if (debounceHandle !== undefined) clearTimeout(debounceHandle);
   debounceHandle = setTimeout(() => {
-    runLadder().catch((error: unknown) => console.error(error));
+    runPipelineLoop().catch((error: unknown) => console.error(error));
   }, DEBOUNCE_MS);
 }
 
-function revokeAllRowObjectUrls(): void {
-  for (const row of state.rows) {
-    // 元ファイル行の objectUrl は state.objectUrl と共有しているため、ここでは個別に revoke しない
-    if (row.objectUrl && row.spec.format) URL.revokeObjectURL(row.objectUrl);
-  }
-}
-
-/** 長辺の上限 select の選択肢を、今の画像でアップスケールになるものだけ disabled にする */
-function updateLongEdgeOptions(): void {
-  const meta = state.meta;
-  if (!meta) return;
-  const longEdge = Math.max(meta.width, meta.height);
-  let selectionInvalidated = false;
-  for (const option of Array.from(longEdgeSelectEl.options)) {
-    if (option.value === "") continue;
-    const value = Number(option.value);
-    const disabled = value >= longEdge;
-    option.disabled = disabled;
-    if (disabled && option.selected) selectionInvalidated = true;
-  }
-  if (selectionInvalidated) {
-    longEdgeSelectEl.value = "";
-    state.longEdgeCap = null;
-  }
-}
-
-async function renderLadder(): Promise<void> {
-  const meta = state.meta;
-  if (!meta) return;
-  const support = await supportPromise;
-  // await 中に画像が差し替えられていたら、古い meta に対する描画は捨てる
-  if (state.meta !== meta) return;
-
-  revokeAllRowObjectUrls();
-  ladderEl.innerHTML = "";
-  const specs = buildRowSpecs();
-  state.rows = specs.map((spec, i) => {
-    const supported = spec.format === null || isFormatSupported(spec.format, support);
-    return createRow(spec, i, supported);
-  });
-  for (const row of state.rows) ladderEl.append(row.rowEl);
-
-  const originalRow = state.rows.find((row) => row.spec.format === null);
-  if (originalRow) applyOriginalFileRow(originalRow);
-
-  recomputeBars();
-  runLadder().catch((error: unknown) => console.error(error));
-}
-
-function renderResult(): void {
-  const meta = state.meta;
-  if (!meta || !state.objectUrl) return;
-  resultSectionEl.classList.remove("hidden");
-  resultSectionEl.classList.add("flex");
-  thumbnailEl.src = state.objectUrl;
-  metaTableEl.innerHTML = buildMetaRowsHtml(meta);
-  updateLongEdgeOptions();
-  renderLadder().catch((error: unknown) => console.error(error));
-}
+// --- ファイル読み込み ---------------------------------------------------------
 
 async function handleFileSelected(file: File): Promise<void> {
   if (!file.type.startsWith("image/")) {
@@ -483,18 +792,34 @@ async function handleFileSelected(file: File): Promise<void> {
   try {
     const image = await loadImage(objectUrl);
     const meta = await extractMetadata(file, image);
+    const originalArrayBuffer = await file.arrayBuffer();
+    const support = state.support ?? (await supportPromise);
+    state.support = support;
 
-    // 差し替え成功後にのみ前の状態を破棄する。失敗時に前の画像が消える不整合を避けるため
-    revokeAllRowObjectUrls();
     if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    revokeOutputObjectUrl();
 
     state.file = file;
     state.objectUrl = objectUrl;
+    state.originalArrayBuffer = originalArrayBuffer;
     state.image = image;
     state.meta = meta;
-    state.rows = [];
+    state.quality = 0.8;
+    state.longEdgeCap = null;
+    state.formatChoice = "original";
+    state.stripMetadataEnabled = true;
+    state.activeStage = "original";
+    state.pipeline = null;
+    qualityInputEl.value = "0.8";
+    qualityValueEl.textContent = "0.80";
 
-    renderResult();
+    resultSectionEl.classList.remove("hidden");
+    resultSectionEl.classList.add("flex");
+
+    buildPipelineNodes(meta, support);
+    setActiveStage("original");
+    renderNodes();
+    runPipelineLoop().catch((error: unknown) => console.error(error));
   } catch (error) {
     console.error(error);
     URL.revokeObjectURL(objectUrl);
@@ -558,12 +883,14 @@ sampleButtonEl.addEventListener("click", () => {
 qualityInputEl.addEventListener("input", () => {
   state.quality = Number.parseFloat(qualityInputEl.value);
   qualityValueEl.textContent = state.quality.toFixed(2);
-  scheduleLadder();
-});
-
-longEdgeSelectEl.addEventListener("change", () => {
-  state.longEdgeCap = longEdgeSelectEl.value ? Number.parseInt(longEdgeSelectEl.value, 10) : null;
-  scheduleLadder();
+  updateFormatNode();
+  scheduleRecompute();
 });
 
 qualityValueEl.textContent = state.quality.toFixed(2);
+
+window.addEventListener("resize", () => {
+  if (!state.meta) return;
+  layoutNodes();
+  layoutEdges();
+});

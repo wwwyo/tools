@@ -85,7 +85,8 @@ export function basenameNoExt(name: string): string {
   return i > 0 ? name.slice(0, i) : name || "image";
 }
 
-function byteAt(bytes: Uint8Array, offset: number): number {
+// metadataStrip.ts の RIFF/PNG チャンク走査でも使うため export する
+export function byteAt(bytes: Uint8Array, offset: number): number {
   return bytes[offset] ?? 0;
 }
 
@@ -93,7 +94,7 @@ function matchesMagic(bytes: Uint8Array, offset: number, magic: number[]): boole
   return magic.every((b, i) => byteAt(bytes, offset + i) === b);
 }
 
-function asciiAt(bytes: Uint8Array, offset: number, len: number): string {
+export function asciiAt(bytes: Uint8Array, offset: number, len: number): string {
   let s = "";
   for (let i = 0; i < len; i++) s += String.fromCharCode(byteAt(bytes, offset + i));
   return s;
