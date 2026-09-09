@@ -1,0 +1,46 @@
+:root {
+  --foreground: #1f1b16;
+  --primary: #c73e2e;
+  --ring: #c73e2e;
+  --muted-foreground: #7a7367;
+  --border: rgba(140, 133, 123, 0.35);
+}
+
+/*
+ * ラダー行の入場アニメーション。行数は画像サイズに応じて可変なので、
+ * stagger の delay は JS 側で `animation-delay: calc(var(--row-index) * 40ms)` として
+ * 行ごとに割り当てる（固定 keyframes 本体だけをここに置く）。
+ */
+@keyframes keiryo-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.keiryo-row {
+  animation: keiryo-row-in 180ms ease-out both;
+  animation-delay: calc(var(--row-index, 0) * 40ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .keiryo-row {
+    animation: none;
+  }
+}
+
+/* 比率バー。scaleX で伸縮させ、幅の再計算（reflow）を発生させない */
+.keiryo-bar-fill {
+  transform-origin: left;
+  transition: transform 250ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .keiryo-bar-fill {
+    transition: none;
+  }
+}
