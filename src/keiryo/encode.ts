@@ -3,30 +3,35 @@
  * 決定論的な処理は全てページ内 Canvas で完結し、画像を外部へは送らない。
  */
 
-/** このツールが出力形式として提供するもの。PNG は非可逆圧縮の設定項目（品質）が意味を持たないため対象外 */
-export type OutputFormat = "jpeg" | "webp";
+/** このツールが梯子の行として並べる出力形式。品質パラメータの有無に関わらず、拡張子ごとに1行 */
+export type OutputFormat = "jpeg" | "webp" | "avif" | "png";
+
+/** canvas.toBlob の対応可否を実機で probe する対象。PNG は可逆圧縮で全ブラウザが常に対応するため対象外 */
+export type ProbedFormat = "jpeg" | "webp" | "avif";
 
 const FORMAT_MIME: Record<OutputFormat, string> = {
   jpeg: "image/jpeg",
   webp: "image/webp",
+  avif: "image/avif",
+  png: "image/png",
 };
 
 const FORMAT_EXT: Record<OutputFormat, string> = {
   jpeg: "jpg",
   webp: "webp",
+  avif: "avif",
+  png: "png",
 };
 
 export function extensionFor(format: OutputFormat): string {
   return FORMAT_EXT[format];
 }
 
-/** 再エンコード結果。fellBack は WebP 非対応ブラウザで JPEG へ自動的に切り替わったことを示す */
+/** 再エンコード結果 */
 export interface EncodeResult {
   blob: Blob;
   width: number;
   height: number;
-  format: OutputFormat;
-  fellBack: boolean;
 }
 
 /** 長辺の上限（px）から出力寸法を求める。cap が null、または画像が既に cap 以下ならアップスケールせず原寸を返す */
@@ -49,9 +54,31 @@ function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality?: number)
 }
 
 /**
+ * ブラウザが実際にその形式で書き出せるかを 1×1 canvas で probe する。
+ * 対応していない形式は canvas.toBlob が無言で別形式（PNG 等）を返すことがあるため、
+ * 返ってきた blob.type が要求した mime と一致するかで判定する。
+ */
+export async function detectFormatSupport(): Promise<Record<ProbedFormat, boolean>> {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+
+  async function supports(mime: string): Promise<boolean> {
+    const blob = await canvasToBlob(canvas, mime);
+    return blob !== null && blob.type === mime;
+  }
+
+  const [jpeg, webp, avif] = await Promise.all([
+    supports(FORMAT_MIME.jpeg),
+    supports(FORMAT_MIME.webp),
+    supports(FORMAT_MIME.avif),
+  ]);
+  return { jpeg, webp, avif };
+}
+
+/**
  * 画像を指定の長辺上限まで縮小し、指定形式・品質で再エンコードする。
- * WebP を要求してもブラウザが対応していないと toBlob は無言で PNG 等を返すことがあるため、
- * 返ってきた blob.type を確認し、期待外なら JPEG で撮り直して fellBack を立てる。
+ * PNG は可逆圧縮のため quality は canvas 側で無視される（呼び出し側は気にせず渡してよい）。
  */
 export async function encodeImage(
   img: HTMLImageElement,
@@ -69,13 +96,7 @@ export async function encodeImage(
   const blob = await canvasToBlob(canvas, mime, opts.quality);
   if (!blob) throw new Error("エンコードに失敗しました");
 
-  if (opts.format === "webp" && blob.type !== "image/webp") {
-    const jpegBlob = await canvasToBlob(canvas, "image/jpeg", opts.quality);
-    if (!jpegBlob) throw new Error("エンコードに失敗しました");
-    return { blob: jpegBlob, width: dims.width, height: dims.height, format: "jpeg", fellBack: true };
-  }
-
-  return { blob, width: dims.width, height: dims.height, format: opts.format, fellBack: false };
+  return { blob, width: dims.width, height: dims.height };
 }
 
 /**
