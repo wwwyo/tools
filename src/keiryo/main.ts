@@ -6,15 +6,18 @@ import {
   formatDelta,
   isFormatSupported,
   runPipeline,
+  computeSizeLadder,
   buildOriginalDetailHtml,
   buildLongEdgeOptionsHtml,
   buildSizeInfoHtml,
+  buildSizeLadderHtml,
   buildFormatComparisonHtml,
   buildMetadataSegmentsHtml,
   metadataStatusText,
   buildOutputInfoHtml,
   type FormatChoice,
   type PipelineResult,
+  type SizeLadderRow,
 } from "./pipeline";
 
 const appEl = document.getElementById("app");
@@ -53,13 +56,39 @@ appEl.innerHTML = `
     </section>
 
     <section id="result-section" class="hidden flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-2 rounded border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-        <span class="font-semibold text-foreground">パラメータ</span>
-        <label class="flex flex-1 items-center gap-2">
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-2 rounded border border-border bg-card px-3 py-2.5 text-xs text-muted-foreground">
+        <span class="text-sm font-semibold text-foreground">パラメータ</span>
+        <label class="flex items-center gap-2">
           <span>品質</span>
-          <input type="range" id="quality" min="0.3" max="1" step="0.05" value="0.8" class="w-full max-w-48 accent-primary" />
+          <input type="range" id="quality" min="0.3" max="1" step="0.05" value="0.8" class="w-32 accent-primary" />
           <span id="quality-value" class="w-10 shrink-0 font-mono text-foreground">0.80</span>
         </label>
+        <label class="flex items-center gap-2">
+          <span>長辺の上限</span>
+          <select
+            id="long-edge"
+            class="rounded border border-border bg-background px-1.5 py-1 text-foreground"
+            aria-label="長辺の上限"
+          ></select>
+        </label>
+        <label class="flex items-center gap-2">
+          <span>出力形式</span>
+          <select
+            id="format-select"
+            class="rounded border border-border bg-background px-1.5 py-1 text-foreground"
+            aria-label="出力形式"
+          ></select>
+        </label>
+        <label class="flex items-center gap-1.5">
+          <input type="checkbox" id="strip-metadata" checked class="accent-primary" />
+          <span>メタデータ除去</span>
+        </label>
+        <a
+          id="download-button"
+          href="#"
+          aria-disabled="true"
+          class="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground opacity-50 transition-colors hover:opacity-90"
+        >ダウンロード</a>
       </div>
 
       <div id="canvas" class="keiryo-canvas relative overflow-x-auto rounded border border-border">
@@ -80,6 +109,10 @@ const errorEl = document.getElementById("error") as HTMLParagraphElement;
 const resultSectionEl = document.getElementById("result-section") as HTMLElement;
 const qualityInputEl = document.getElementById("quality") as HTMLInputElement;
 const qualityValueEl = document.getElementById("quality-value") as HTMLSpanElement;
+const longEdgeSelectEl = document.getElementById("long-edge") as HTMLSelectElement;
+const formatSelectEl = document.getElementById("format-select") as HTMLSelectElement;
+const stripMetadataCheckboxEl = document.getElementById("strip-metadata") as HTMLInputElement;
+const downloadButtonEl = document.getElementById("download-button") as HTMLAnchorElement;
 const canvasEl = document.getElementById("canvas") as HTMLDivElement;
 const canvasContentEl = document.getElementById("canvas-content") as HTMLDivElement;
 const edgesSvgEl = document.getElementById("edges") as unknown as SVGSVGElement;
@@ -140,24 +173,20 @@ interface OriginalNodeEls extends BaseNodeEls {
 }
 
 interface SizeNodeEls extends BaseNodeEls {
-  selectEl: HTMLSelectElement;
-  dimsEl: HTMLSpanElement;
+  summaryEl: HTMLSpanElement;
 }
 
 interface FormatNodeEls extends BaseNodeEls {
-  selectEl: HTMLSelectElement;
-  qualityEl: HTMLSpanElement;
+  summaryEl: HTMLSpanElement;
 }
 
 interface MetadataNodeEls extends BaseNodeEls {
-  checkboxEl: HTMLInputElement;
   summaryEl: HTMLSpanElement;
 }
 
 interface OutputNodeEls extends BaseNodeEls {
   bytesEl: HTMLSpanElement;
   deltaEl: HTMLSpanElement;
-  downloadEl: HTMLAnchorElement;
 }
 
 interface NodeElsMap {
@@ -192,6 +221,9 @@ interface AppState {
   outputObjectUrl: string | null;
   nodeEls: NodeElsMap;
   edgeEls: EdgeEls[];
+  /** サイズノードの長辺ラダー（what-if 比較）。品質ごとにキャッシュし、選択中でだけ埋める */
+  sizeLadderCache: Map<string, SizeLadderRow[]>;
+  sizeLadderRows: SizeLadderRow[] | null;
 }
 
 const state: AppState = {
@@ -211,6 +243,8 @@ const state: AppState = {
   outputObjectUrl: null,
   nodeEls: {},
   edgeEls: [],
+  sizeLadderCache: new Map(),
+  sizeLadderRows: null,
 };
 
 // ブラウザの書き出し対応可否は起動直後に一度だけ probe する
@@ -224,12 +258,6 @@ function showError(message: string): void {
 function clearError(): void {
   errorEl.textContent = "";
   errorEl.classList.add("hidden");
-}
-
-/** クリック/キー操作がノード内のコントロール（select・input・button・a）由来かどうか */
-function isInteractiveTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.closest("select, input, button, a, label") !== null;
 }
 
 const FORMAT_SELECT_CHOICES: readonly { value: FormatChoice; label: string }[] = [
@@ -287,8 +315,7 @@ function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElem
   if (inputPortEl) rootEl.append(inputPortEl);
   if (outputPortEl) rootEl.append(outputPortEl);
 
-  rootEl.addEventListener("click", (event) => {
-    if (isInteractiveTarget(event.target)) return;
+  rootEl.addEventListener("click", () => {
     setActiveStage(stageId);
     rootEl.focus();
   });
@@ -303,8 +330,12 @@ function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElem
   return { rootEl, headerEl, bodyEl, inputPortEl, outputPortEl };
 }
 
-/** ノード5枚とエッジ4本を1回だけ生成する（画像読み込みごとに1回。以降の再計算は中身の更新のみ） */
-function buildPipelineNodes(meta: ImageMeta, support: Record<ProbedFormat, boolean>): void {
+/**
+ * ノード5枚とエッジ4本を1回だけ生成する（画像読み込みごとに1回。以降の再計算は中身の更新のみ）。
+ * ノードは表示専用（ヘッダー・要約行・ポートのみ）で、パラメータ操作はすべてキャンバス上部の
+ * パラメータバー側の要素が担う（引数の support は呼び出し側の互換のため受け取るだけで使わない）
+ */
+function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boolean>): void {
   canvasContentEl.querySelectorAll(".keiryo-node").forEach((el) => el.remove());
   canvasContentEl.querySelectorAll(".keiryo-edge-label").forEach((el) => el.remove());
   state.nodeEls = {};
@@ -319,59 +350,30 @@ function buildPipelineNodes(meta: ImageMeta, support: Record<ProbedFormat, boole
         thumbEl.alt = "";
         thumbEl.className = "max-h-14 w-fit rounded border border-border object-contain";
         const summaryEl = document.createElement("span");
-        summaryEl.className = "font-mono text-muted-foreground";
+        summaryEl.className = "whitespace-pre-line font-mono text-muted-foreground";
         shell.bodyEl.append(thumbEl, summaryEl);
         state.nodeEls.original = { ...shell, thumbEl, summaryEl };
         break;
       }
       case "size": {
-        const selectEl = document.createElement("select");
-        selectEl.className = "w-full rounded border border-border bg-background px-1.5 py-1 text-foreground";
-        selectEl.setAttribute("aria-label", "長辺の上限");
-        selectEl.innerHTML = buildLongEdgeOptionsHtml(meta, state.longEdgeCap);
-        selectEl.addEventListener("change", () => {
-          state.longEdgeCap = selectEl.value ? Number.parseInt(selectEl.value, 10) : null;
-          scheduleRecompute();
-        });
-        const dimsEl = document.createElement("span");
-        dimsEl.className = "font-mono text-muted-foreground";
-        shell.bodyEl.append(selectEl, dimsEl);
-        state.nodeEls.size = { ...shell, selectEl, dimsEl };
+        const summaryEl = document.createElement("span");
+        summaryEl.className = "whitespace-pre-line font-mono text-muted-foreground";
+        shell.bodyEl.append(summaryEl);
+        state.nodeEls.size = { ...shell, summaryEl };
         break;
       }
       case "format": {
-        const selectEl = document.createElement("select");
-        selectEl.className = "w-full rounded border border-border bg-background px-1.5 py-1 text-foreground";
-        selectEl.setAttribute("aria-label", "出力形式");
-        selectEl.innerHTML = buildFormatSelectOptions(support, state.formatChoice);
-        selectEl.addEventListener("change", () => {
-          state.formatChoice = selectEl.value as FormatChoice;
-          scheduleRecompute();
-        });
-        const qualityEl = document.createElement("span");
-        qualityEl.className = "font-mono text-muted-foreground";
-        shell.bodyEl.append(selectEl, qualityEl);
-        state.nodeEls.format = { ...shell, selectEl, qualityEl };
+        const summaryEl = document.createElement("span");
+        summaryEl.className = "whitespace-pre-line font-mono text-muted-foreground";
+        shell.bodyEl.append(summaryEl);
+        state.nodeEls.format = { ...shell, summaryEl };
         break;
       }
       case "metadata": {
-        const labelEl = document.createElement("label");
-        labelEl.className = "flex items-center gap-1.5";
-        const checkboxEl = document.createElement("input");
-        checkboxEl.type = "checkbox";
-        checkboxEl.checked = state.stripMetadataEnabled;
-        checkboxEl.className = "accent-primary";
-        checkboxEl.addEventListener("change", () => {
-          state.stripMetadataEnabled = checkboxEl.checked;
-          scheduleRecompute();
-        });
-        const checkboxLabelEl = document.createElement("span");
-        checkboxLabelEl.textContent = "除去する";
-        labelEl.append(checkboxEl, checkboxLabelEl);
         const summaryEl = document.createElement("span");
-        summaryEl.className = "font-mono text-muted-foreground";
-        shell.bodyEl.append(labelEl, summaryEl);
-        state.nodeEls.metadata = { ...shell, checkboxEl, summaryEl };
+        summaryEl.className = "whitespace-pre-line font-mono text-muted-foreground";
+        shell.bodyEl.append(summaryEl);
+        state.nodeEls.metadata = { ...shell, summaryEl };
         break;
       }
       case "output": {
@@ -379,13 +381,8 @@ function buildPipelineNodes(meta: ImageMeta, support: Record<ProbedFormat, boole
         bytesEl.className = "font-mono text-base font-semibold text-foreground";
         const deltaEl = document.createElement("span");
         deltaEl.className = "font-mono font-semibold text-primary";
-        const downloadEl = document.createElement("a");
-        downloadEl.className =
-          "inline-flex w-fit items-center gap-1 rounded border border-primary bg-primary px-2 py-1 font-semibold text-primary-foreground transition-colors hover:opacity-90";
-        downloadEl.href = "#";
-        downloadEl.textContent = "ダウンロード";
-        shell.bodyEl.append(bytesEl, deltaEl, downloadEl);
-        state.nodeEls.output = { ...shell, bytesEl, deltaEl, downloadEl };
+        shell.bodyEl.append(bytesEl, deltaEl);
+        state.nodeEls.output = { ...shell, bytesEl, deltaEl };
         break;
       }
     }
@@ -453,7 +450,42 @@ function setActiveStage(stageId: StageId): void {
     els.headerEl.classList.toggle("bg-muted", !active);
     els.headerEl.classList.toggle("text-foreground", !active);
   }
+  if (stageId === "size") {
+    syncSizeLadderForQuality();
+  } else {
+    renderDetailPanel();
+  }
+}
+
+/**
+ * サイズノードの長辺ラダーを現在の品質のキャッシュから引き当て、詳細パネルへ反映する。
+ * キャッシュが無ければ非同期で埋めにいく（サイズノードが選択されているときだけ呼ばれる）
+ */
+function syncSizeLadderForQuality(): void {
+  const key = sizeLadderCacheKey(state.quality);
+  const cached = state.sizeLadderCache.get(key);
+  state.sizeLadderRows = cached ?? null;
   renderDetailPanel();
+  if (!cached) ensureSizeLadder().catch((error: unknown) => console.error(error));
+}
+
+function sizeLadderCacheKey(quality: number): string {
+  return quality.toFixed(2);
+}
+
+/** サイズラダーを計算してキャッシュへ書き込む。計算中に画像や品質が変わっていたら結果を捨てる */
+async function ensureSizeLadder(): Promise<void> {
+  const meta = state.meta;
+  const image = state.image;
+  if (!meta || !image) return;
+  const key = sizeLadderCacheKey(state.quality);
+  const rows = await computeSizeLadder(image, meta, state.quality);
+  if (state.meta !== meta || sizeLadderCacheKey(state.quality) !== key) return;
+  state.sizeLadderCache.set(key, rows);
+  if (state.activeStage === "size") {
+    state.sizeLadderRows = rows;
+    renderDetailPanel();
+  }
 }
 
 /** 原本比に応じたエッジの太さ（min 1.5 / max 8） */
@@ -532,24 +564,30 @@ function updateOriginalNode(): void {
   const els = state.nodeEls.original;
   if (!meta || !els) return;
   if (state.objectUrl) els.thumbEl.src = state.objectUrl;
-  els.summaryEl.textContent = `${meta.width}×${meta.height} · ${meta.sniffedFormat} · ${formatBytes(meta.bytes)}`;
+  els.summaryEl.textContent = `${meta.width}×${meta.height}\n${meta.sniffedFormat}\n${formatBytes(meta.bytes)}`;
 }
 
 function updateSizeNode(): void {
   const els = state.nodeEls.size;
   if (!els) return;
   const pipeline = state.pipeline;
-  els.dimsEl.textContent = state.computing
-    ? "計算中…"
-    : pipeline
-      ? `${pipeline.size.detail.afterWidth}×${pipeline.size.detail.afterHeight}`
-      : "—";
+  els.summaryEl.textContent =
+    state.computing || !pipeline
+      ? "計算中…"
+      : `${pipeline.size.detail.beforeWidth}×${pipeline.size.detail.beforeHeight} → ${pipeline.size.detail.afterWidth}×${pipeline.size.detail.afterHeight}`;
 }
 
 function updateFormatNode(): void {
   const els = state.nodeEls.format;
   if (!els) return;
-  els.qualityEl.textContent = `品質 ${state.quality.toFixed(2)}`;
+  const pipeline = state.pipeline;
+  if (state.computing || !pipeline) {
+    els.summaryEl.textContent = "計算中…";
+    return;
+  }
+  const d = pipeline.format.detail;
+  const formatText = d.passthrough ? `${d.chosenLabel}（元のまま）` : `${d.fromLabel} → ${d.chosenLabel}`;
+  els.summaryEl.textContent = `${formatText}\n品質 ${state.quality.toFixed(2)}`;
 }
 
 function updateMetadataNode(): void {
@@ -561,9 +599,12 @@ function updateMetadataNode(): void {
     return;
   }
   const d = pipeline.metadata.detail;
-  els.summaryEl.textContent = d.cameFromCanvas
-    ? "再エンコードで除去済み"
-    : `Exif など ${formatBytes(d.scan.totalBytes)}`;
+  if (d.cameFromCanvas) {
+    els.summaryEl.textContent = "再エンコードで除去済み";
+    return;
+  }
+  const bytesText = `Exif など ${formatBytes(d.scan.totalBytes)}`;
+  els.summaryEl.textContent = d.strippedApplied ? `${bytesText} を除去` : `${bytesText}（保持）`;
 }
 
 function updateOutputNode(): void {
@@ -574,14 +615,24 @@ function updateOutputNode(): void {
   if (state.computing || !pipeline) {
     els.bytesEl.textContent = "計算中…";
     els.deltaEl.textContent = "";
-    els.downloadEl.classList.add("pointer-events-none", "opacity-50");
     return;
   }
-  els.downloadEl.classList.remove("pointer-events-none", "opacity-50");
   els.bytesEl.textContent = formatBytes(pipeline.output.output.bytes);
   els.deltaEl.textContent = formatDelta(pipeline.output.output.bytes, meta.bytes);
-  els.downloadEl.href = state.outputObjectUrl ?? "#";
-  els.downloadEl.download = pipeline.output.detail.downloadName;
+}
+
+/** パラメータバーのダウンロードボタンを最新のパイプライン結果に合わせる（disabled 切り替え・href・ファイル名） */
+function updateDownloadButton(): void {
+  const pipeline = state.pipeline;
+  if (!pipeline || !state.outputObjectUrl) {
+    downloadButtonEl.classList.add("pointer-events-none", "opacity-50");
+    downloadButtonEl.setAttribute("aria-disabled", "true");
+    return;
+  }
+  downloadButtonEl.classList.remove("pointer-events-none", "opacity-50");
+  downloadButtonEl.removeAttribute("aria-disabled");
+  downloadButtonEl.href = state.outputObjectUrl;
+  downloadButtonEl.download = pipeline.output.detail.downloadName;
 }
 
 /** ノード本文・エッジの太さ/ラベル・レイアウトをまとめて更新する（要素は作り直さない） */
@@ -592,6 +643,7 @@ function renderNodes(): void {
   updateFormatNode();
   updateMetadataNode();
   updateOutputNode();
+  updateDownloadButton();
   styleEdges();
   layoutEdges();
 
@@ -602,8 +654,8 @@ function renderNodes(): void {
 
 // --- 詳細パネル -------------------------------------------------------------
 // マークアップの組み立ては pipeline.ts の build*Html / *StatusText 関数に寄せ、
-// ここでは innerHTML への反映（＝ DOM 固有の処理）だけを担う。操作系のコントロールは
-// すべてノード本体に移設済みのため、詳細パネル側にイベント登録は不要。
+// ここでは innerHTML への反映（＝ DOM 固有の処理）だけを担う。パラメータ操作は
+// すべてパラメータバー側の要素が担うため、詳細パネル側にイベント登録は不要。
 
 function renderOriginalDetail(): void {
   const meta = state.meta;
@@ -624,9 +676,19 @@ function renderSizeDetail(): void {
   const meta = state.meta;
   const pipeline = state.pipeline;
   if (!meta) return;
-  detailPanelEl.innerHTML = pipeline
+  const pipelineHtml = pipeline
     ? `<div class="flex flex-col gap-1.5 text-sm">${buildSizeInfoHtml(meta, pipeline.size.detail, pipeline.size.output.bytes)}</div>`
     : `<p class="text-xs text-muted-foreground">計算中…</p>`;
+  const ladderHtml = state.sizeLadderRows
+    ? `<div class="flex flex-col">${buildSizeLadderHtml(state.sizeLadderRows, state.longEdgeCap)}</div>`
+    : `<p class="text-xs text-muted-foreground">長辺ごとの比較を計算中…</p>`;
+  detailPanelEl.innerHTML = `
+    ${pipelineHtml}
+    <div class="flex flex-col gap-1.5 pt-2">
+      <span class="text-xs font-semibold text-muted-foreground">長辺ごとの比較（同じ品質・同じ形式で what-if）</span>
+      ${ladderHtml}
+    </div>
+  `;
 }
 
 function renderFormatDetail(): void {
@@ -635,8 +697,9 @@ function renderFormatDetail(): void {
     detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
     return;
   }
+  const dims = { width: pipeline.size.output.width, height: pipeline.size.output.height };
   detailPanelEl.innerHTML = `
-    <div class="flex flex-col">${buildFormatComparisonHtml(pipeline.format.detail.comparison)}</div>
+    <div class="flex flex-col">${buildFormatComparisonHtml(pipeline.format.detail.comparison, dims, pipeline.format.detail.highlightFormat)}</div>
     ${pipeline.format.detail.qualityIgnored ? `<p class="text-xs text-muted-foreground">PNG は可逆圧縮のため品質は効きません。</p>` : ""}
   `;
 }
@@ -813,8 +876,13 @@ async function handleFileSelected(file: File): Promise<void> {
     state.stripMetadataEnabled = true;
     state.activeStage = "original";
     state.pipeline = null;
+    state.sizeLadderCache = new Map();
+    state.sizeLadderRows = null;
     qualityInputEl.value = "0.8";
     qualityValueEl.textContent = "0.80";
+    longEdgeSelectEl.innerHTML = buildLongEdgeOptionsHtml(meta, null);
+    formatSelectEl.innerHTML = buildFormatSelectOptions(support, "original");
+    stripMetadataCheckboxEl.checked = true;
 
     resultSectionEl.classList.remove("hidden");
     resultSectionEl.classList.add("flex");
@@ -887,6 +955,23 @@ qualityInputEl.addEventListener("input", () => {
   state.quality = Number.parseFloat(qualityInputEl.value);
   qualityValueEl.textContent = state.quality.toFixed(2);
   updateFormatNode();
+  if (state.activeStage === "size") syncSizeLadderForQuality();
+  scheduleRecompute();
+});
+
+longEdgeSelectEl.addEventListener("change", () => {
+  state.longEdgeCap = longEdgeSelectEl.value ? Number.parseInt(longEdgeSelectEl.value, 10) : null;
+  if (state.activeStage === "size") renderDetailPanel();
+  scheduleRecompute();
+});
+
+formatSelectEl.addEventListener("change", () => {
+  state.formatChoice = formatSelectEl.value as FormatChoice;
+  scheduleRecompute();
+});
+
+stripMetadataCheckboxEl.addEventListener("change", () => {
+  state.stripMetadataEnabled = stripMetadataCheckboxEl.checked;
   scheduleRecompute();
 });
 

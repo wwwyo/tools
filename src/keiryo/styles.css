@@ -93,6 +93,15 @@
   white-space: nowrap;
 }
 
+/*
+ * 詳細パネルの比較テーブル（フォーマット比較・サイズラダー）が使う比例バー。
+ * scaleX で伸縮させ、幅の再計算（reflow）を発生させない
+ */
+.keiryo-bar-fill {
+  transform-origin: left;
+  transition: transform 250ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .keiryo-edges {
     animation: none;
@@ -102,5 +111,9 @@
   .keiryo-edge.is-animating {
     animation: none;
     stroke-dasharray: none;
+  }
+
+  .keiryo-bar-fill {
+    transition: none;
   }
 }

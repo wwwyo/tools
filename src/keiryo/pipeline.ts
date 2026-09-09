@@ -94,7 +94,11 @@ export interface FormatComparisonRow {
 
 export interface FormatStageDetail {
   passthrough: boolean;
+  /** フォーマット段に入ってきた時点の形式ラベル（ノードの「JPEG → WebP」表示の左側に使う） */
+  fromLabel: string;
   chosenLabel: string;
+  /** 比較表で「今これ」を強調する行の判定に使う（passthrough でも元の実形式にマップして1行は必ず光らせる） */
+  highlightFormat: OutputFormat;
   comparison: FormatComparisonRow[];
   qualityIgnored: boolean;
 }
@@ -221,12 +225,25 @@ async function computeFormatStage(
     });
   }
 
+  // 比較表で光らせる行。「元のまま」でも sizeOutput の実形式（素通しなら sniff 結果）に
+  // マップし、必ずどこかの行が「今これ」を指すようにする
+  const highlightFormat: OutputFormat =
+    formatChoice === "original"
+      ? sizeOutput.format === "original"
+        ? originalReencodeFormat(params.meta.sniffedFormat)
+        : sizeOutput.format
+      : formatChoice;
+
+  const fromLabel = currentFormatLabel(sizeOutput.format, params.meta.ext);
+
   if (formatChoice === "original") {
     return {
       output: sizeOutput,
       detail: {
         passthrough: true,
-        chosenLabel: currentFormatLabel(sizeOutput.format, params.meta.ext),
+        fromLabel,
+        chosenLabel: fromLabel,
+        highlightFormat,
         comparison,
         qualityIgnored: false,
       },
@@ -246,7 +263,9 @@ async function computeFormatStage(
     },
     detail: {
       passthrough: false,
+      fromLabel,
       chosenLabel: FORMAT_LABELS[formatChoice],
+      highlightFormat,
       comparison,
       qualityIgnored: formatChoice === "png",
     },
@@ -322,6 +341,115 @@ export async function runPipeline(params: PipelineParams): Promise<PipelineResul
   return { originalBytes: params.meta.bytes, size, format, metadata, output };
 }
 
+// --- サイズノードの what-if 比較（長辺ラダー） ---------------------------------
+// パイプライン本体の longEdgeCap とは独立に「同じ品質・同じ元フォーマットのまま
+// 長辺だけ動かしたらどうなるか」を5段まとめて計算する。呼び出し側（main.ts）が
+// サイズノード選択時にだけ呼び、(品質) をキーにキャッシュして再選択時の再計算を避ける
+// （元フォーマットは画像ごとに固定なのでキーに含めなくても衝突しない）。
+
+export interface SizeLadderRow {
+  cap: number | null;
+  label: string;
+  width: number;
+  height: number;
+  bytes: number;
+}
+
+const SIZE_LADDER_STEPS: readonly { cap: number | null; label: string }[] = [
+  { cap: null, label: "原寸" },
+  { cap: 2048, label: "2048px" },
+  { cap: 1600, label: "1600px" },
+  { cap: 1200, label: "1200px" },
+  { cap: 800, label: "800px" },
+];
+
+/** 長辺ラダーの各段を、元と同じフォーマット・現在の品質で逐次エンコードする */
+export async function computeSizeLadder(
+  image: HTMLImageElement,
+  meta: ImageMeta,
+  quality: number,
+): Promise<SizeLadderRow[]> {
+  const format = originalReencodeFormat(meta.sniffedFormat);
+  const rows: SizeLadderRow[] = [];
+  for (const step of SIZE_LADDER_STEPS) {
+    const result = await encodeImage(image, { format, quality, longEdgeCap: step.cap });
+    rows.push({ cap: step.cap, label: step.label, width: result.width, height: result.height, bytes: result.blob.size });
+  }
+  return rows;
+}
+
+// --- 比較テーブルの棒グラフ行（フォーマット比較・サイズラダー共通） -------------------
+
+interface BarRow {
+  label: string;
+  dims: string;
+  bytes: number | null;
+  delta: string | null;
+  supported: boolean;
+  highlighted: boolean;
+  /** 最大行に対する比率（0〜1）。scaleX の transform に使う */
+  scale: number;
+}
+
+/** label | 寸法(mono) | 容量(mono) | 差分%(mono, primary) | 比例バー の1行を組み立てる */
+function buildBarRowHtml(row: BarRow): string {
+  const highlightClass = row.highlighted ? " bg-muted/60" : "";
+  if (!row.supported) {
+    return (
+      `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
+      `<span class="w-16 shrink-0 font-semibold text-foreground">${row.label}</span>` +
+      `<span class="flex-1 text-xs text-muted-foreground">このブラウザでは書き出し不可</span>` +
+      `</div>`
+    );
+  }
+  return (
+    `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
+    `<span class="w-16 shrink-0 font-semibold text-foreground">${row.label}</span>` +
+    `<span class="w-24 shrink-0 font-mono text-xs text-muted-foreground">${row.dims}</span>` +
+    `<span class="w-16 shrink-0 font-mono text-xs text-muted-foreground">${row.bytes != null ? formatBytes(row.bytes) : "—"}</span>` +
+    `<span class="w-14 shrink-0 text-right font-mono text-xs font-semibold text-primary">${row.delta ?? "±0%"}</span>` +
+    `<div class="h-2 min-w-16 flex-1 overflow-hidden rounded-full bg-muted">` +
+    `<div class="keiryo-bar-fill h-full w-full rounded-full bg-primary" style="transform: scaleX(${row.scale.toFixed(4)});"></div>` +
+    `</div>` +
+    `</div>`
+  );
+}
+
+/** フォーマット比較表（JPEG/WebP/PNG/AVIF）を棒グラフ行として組み立てる */
+export function buildFormatComparisonHtml(
+  comparison: FormatComparisonRow[],
+  dims: { width: number; height: number },
+  highlightFormat: OutputFormat,
+): string {
+  const maxBytes = Math.max(0, ...comparison.filter((row) => row.supported && row.bytes != null).map((row) => row.bytes as number));
+  const rows: BarRow[] = comparison.map((row) => ({
+    label: row.label,
+    dims: `${dims.width}×${dims.height}`,
+    bytes: row.bytes,
+    delta: row.delta,
+    supported: row.supported,
+    highlighted: row.format === highlightFormat,
+    scale: row.supported && row.bytes != null && maxBytes > 0 ? row.bytes / maxBytes : 0,
+  }));
+  return rows.map(buildBarRowHtml).join("");
+}
+
+/** サイズラダー（原寸/2048/1600/1200/800）を棒グラフ行として組み立てる。差分は原寸基準 */
+export function buildSizeLadderHtml(rows: SizeLadderRow[], selectedCap: number | null): string {
+  const baseBytes = rows[0]?.bytes ?? 0;
+  const maxBytes = Math.max(0, ...rows.map((row) => row.bytes));
+  const barRows: BarRow[] = rows.map((row) => ({
+    label: row.label,
+    dims: `${row.width}×${row.height}`,
+    bytes: row.bytes,
+    delta: formatDelta(row.bytes, baseBytes),
+    supported: true,
+    highlighted: row.cap === selectedCap,
+    scale: maxBytes > 0 ? row.bytes / maxBytes : 0,
+  }));
+  return barRows.map(buildBarRowHtml).join("");
+}
+
 // --- 詳細パネルの HTML 組み立て ---------------------------------------------
 // DOM 操作（innerHTML への代入・イベント登録）は main.ts 側の責務として残し、
 // ここでは値からマークアップ文字列を組み立てるところまでを担う。
@@ -394,21 +522,6 @@ export function buildSizeInfoHtml(meta: ImageMeta, detail: SizeStageDetail, afte
   return rows + note;
 }
 
-
-/** フォーマットノードの拡張子ごとの圧縮率比較表 */
-export function buildFormatComparisonHtml(comparison: FormatComparisonRow[]): string {
-  return comparison
-    .map((row) => {
-      const bytesText = row.supported ? formatBytes(row.bytes ?? 0) : "このブラウザでは書き出し不可";
-      const deltaText = row.supported ? row.delta : "—";
-      return `<div class="flex items-baseline justify-between gap-3 border-b border-border/60 py-1.5 text-sm last:border-b-0">
-        <span class="text-muted-foreground">${row.label}</span>
-        <span class="font-mono text-xs text-foreground">${bytesText}</span>
-        <span class="w-14 shrink-0 text-right font-mono text-xs font-semibold text-primary">${deltaText}</span>
-      </div>`;
-    })
-    .join("");
-}
 
 /** メタデータノードのセグメント一覧 */
 export function buildMetadataSegmentsHtml(scan: MetadataScanResult): string {
