@@ -1,54 +1,25 @@
 /**
  * 縮小・再エンコードと、動作確認用サンプル画像の生成。
  * 決定論的な処理は全てページ内 Canvas で完結し、画像を外部へは送らない。
+ *
+ * リサイズ + 再エンコードそのもの（pixel 処理）は encode.worker.ts の module worker に
+ * 逃がしている。OffscreenCanvas / Worker が使えない環境（古い Safari 等）だけ、
+ * このファイル内のメインスレッド経路にフォールバックする。
  */
 
 import { buildExifApp1 } from "./exif";
 import { insertJpegSegments } from "./metadataStrip";
+import {
+  computeTargetDims,
+  extensionFor,
+  FORMAT_MIME,
+  type EncodeResult,
+  type OutputFormat,
+  type ProbedFormat,
+} from "./encodeShared";
 
-/** このツールが梯子の行として並べる出力形式。品質パラメータの有無に関わらず、拡張子ごとに1行 */
-export type OutputFormat = "jpeg" | "webp" | "avif" | "png";
-
-/** canvas.toBlob の対応可否を実機で probe する対象。PNG は可逆圧縮で全ブラウザが常に対応するため対象外 */
-export type ProbedFormat = "jpeg" | "webp" | "avif";
-
-const FORMAT_MIME: Record<OutputFormat, string> = {
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  avif: "image/avif",
-  png: "image/png",
-};
-
-const FORMAT_EXT: Record<OutputFormat, string> = {
-  jpeg: "jpg",
-  webp: "webp",
-  avif: "avif",
-  png: "png",
-};
-
-export function extensionFor(format: OutputFormat): string {
-  return FORMAT_EXT[format];
-}
-
-/** 再エンコード結果 */
-export interface EncodeResult {
-  blob: Blob;
-  width: number;
-  height: number;
-}
-
-/** 長辺の上限（px）から出力寸法を求める。cap が null、または画像が既に cap 以下ならアップスケールせず原寸を返す */
-export function computeTargetDims(
-  naturalWidth: number,
-  naturalHeight: number,
-  longEdgeCap: number | null,
-): { width: number; height: number } {
-  if (!longEdgeCap) return { width: naturalWidth, height: naturalHeight };
-  const longEdge = Math.max(naturalWidth, naturalHeight);
-  if (longEdge <= longEdgeCap) return { width: naturalWidth, height: naturalHeight };
-  const scale = longEdgeCap / longEdge;
-  return { width: Math.round(naturalWidth * scale), height: Math.round(naturalHeight * scale) };
-}
+export { computeTargetDims, extensionFor };
+export type { EncodeResult, OutputFormat, ProbedFormat };
 
 function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Blob | null> {
   return new Promise((resolve) => {
@@ -60,6 +31,10 @@ function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality?: number)
  * ブラウザが実際にその形式で書き出せるかを 1×1 canvas で probe する。
  * 対応していない形式は canvas.toBlob が無言で別形式（PNG 等）を返すことがあるため、
  * 返ってきた blob.type が要求した mime と一致するかで判定する。
+ *
+ * この probe はメインスレッドの 1×1 canvas のまま残している（worker へ移していない）。
+ * 1×1 の toBlob は実測でも数msで返る軽い処理で、UI をブロックする類の作業ではないため、
+ * わざわざ worker 側に probe メッセージを増やす複雑さに見合わない。
  */
 export async function detectFormatSupport(): Promise<Record<ProbedFormat, boolean>> {
   const canvas = document.createElement("canvas");
@@ -79,7 +54,9 @@ export async function detectFormatSupport(): Promise<Record<ProbedFormat, boolea
 }
 
 // @jsquash/avif は wasm を読み込むため、AVIF を実際に使うツールでだけ import したい。
-// モジュール Promise をキャッシュし、複数回 AVIF を選んでも読み込みは初回の1回だけにする
+// モジュール Promise をキャッシュし、複数回 AVIF を選んでも読み込みは初回の1回だけにする。
+// これはメインスレッド版フォールバック（encodeImageMainThread）専用のキャッシュで、
+// worker 側は encode.worker.ts に別のキャッシュを独立して持つ
 let avifModulePromise: Promise<typeof import("@jsquash/avif")> | null = null;
 
 function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
@@ -90,7 +67,7 @@ function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
 }
 
 /** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
-async function encodeAvif(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, quality: number): Promise<Blob> {
+async function encodeAvifMainThread(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, quality: number): Promise<Blob> {
   const { encode } = await loadAvifEncoder();
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
@@ -98,10 +75,10 @@ async function encodeAvif(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext
 }
 
 /**
- * 画像を指定の長辺上限まで縮小し、指定形式・品質で再エンコードする。
- * PNG は可逆圧縮のため quality は canvas 側で無視される（呼び出し側は気にせず渡してよい）。
+ * OffscreenCanvas/Worker が使えない環境向けのフォールバック経路。worker 版と同じ手順
+ * （drawImage → toBlob、AVIF だけ getImageData → wasm encode）をメインスレッドで直接行う。
  */
-export async function encodeImage(
+async function encodeImageMainThread(
   img: HTMLImageElement,
   opts: { format: OutputFormat; quality: number; longEdgeCap: number | null },
 ): Promise<EncodeResult> {
@@ -114,7 +91,7 @@ export async function encodeImage(
   ctx.drawImage(img, 0, 0, dims.width, dims.height);
 
   if (opts.format === "avif") {
-    const blob = await encodeAvif(canvas, ctx, opts.quality);
+    const blob = await encodeAvifMainThread(canvas, ctx, opts.quality);
     return { blob, width: dims.width, height: dims.height };
   }
 
@@ -125,6 +102,80 @@ export async function encodeImage(
   return { blob, width: dims.width, height: dims.height };
 }
 
+// --- worker 経由のエンコード -------------------------------------------------
+// OffscreenCanvas と Worker が両方使える環境でだけ worker を使う
+const canUseWorker = typeof OffscreenCanvas !== "undefined" && typeof Worker !== "undefined";
+
+type WorkerResponse =
+  | { id: number; blob: Blob; width: number; height: number }
+  | { id: number; error: string };
+
+interface PendingEncode {
+  resolve: (result: EncodeResult) => void;
+  reject: (error: Error) => void;
+}
+
+let encodeWorker: Worker | null = null;
+let nextRequestId = 0;
+const pendingEncodes = new Map<number, PendingEncode>();
+
+/**
+ * パイプラインの各段は直列に呼ばれる設計（size → format の比較表も1件ずつ await する。
+ * pipeline.ts 参照）ため、同時に複数の encode リクエストが飛び交うことはない。
+ * リクエストごとに worker を作り直す・複数体持つ利点がなく、生成コストと wasm の
+ * 二重ロードを避けるため 1 体だけ遅延生成して使い回す
+ */
+function getEncodeWorker(): Worker {
+  if (encodeWorker) return encodeWorker;
+  const w = new Worker(new URL("./encode.worker.ts", import.meta.url), { type: "module" });
+  w.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    const data = event.data;
+    const task = pendingEncodes.get(data.id);
+    if (!task) return;
+    pendingEncodes.delete(data.id);
+    if ("error" in data) task.reject(new Error(data.error));
+    else task.resolve({ blob: data.blob, width: data.width, height: data.height });
+  };
+  w.onerror = (event) => {
+    // worker の起動失敗など、個々の message ではなく worker 自体が壊れたケース。
+    // 保留中の全リクエストをこのタイミングで解決しないと、呼び出し元が永遠に待ち続ける
+    const error = new Error(event.message || "worker でエラーが発生しました");
+    for (const [id, task] of pendingEncodes) {
+      task.reject(error);
+      pendingEncodes.delete(id);
+    }
+  };
+  encodeWorker = w;
+  return w;
+}
+
+async function encodeImageViaWorker(
+  img: HTMLImageElement,
+  opts: { format: OutputFormat; quality: number; longEdgeCap: number | null },
+): Promise<EncodeResult> {
+  // createImageBitmap 自体はメインスレッドでしか呼べないが、デコード済みのビットマップを
+  // worker へ転送するだけなので画素コピーは発生しない（Transferable として move される）
+  const bitmap = await createImageBitmap(img);
+  const w = getEncodeWorker();
+  const id = nextRequestId++;
+  return new Promise<EncodeResult>((resolve, reject) => {
+    pendingEncodes.set(id, { resolve, reject });
+    w.postMessage({ id, bitmap, format: opts.format, quality: opts.quality, longEdgeCap: opts.longEdgeCap }, [bitmap]);
+  });
+}
+
+/**
+ * 画像を指定の長辺上限まで縮小し、指定形式・品質で再エンコードする。
+ * PNG は可逆圧縮のため quality は canvas 側で無視される（呼び出し側は気にせず渡してよい）。
+ */
+export async function encodeImage(
+  img: HTMLImageElement,
+  opts: { format: OutputFormat; quality: number; longEdgeCap: number | null },
+): Promise<EncodeResult> {
+  if (canUseWorker) return encodeImageViaWorker(img, opts);
+  return encodeImageMainThread(img, opts);
+}
+
 /**
  * 動作確認用のサンプル画像（夕焼けの風景）をその場で生成する。
  * ノイズや雲の粒をランダム生成しているのは、実写に近い「グラデーションだけではない」データを
@@ -133,6 +184,10 @@ export async function encodeImage(
  * canvas が吐く JPEG には Exif が一切無いため、メタデータカードの segment 一覧・Exif 詳細・
  * 編集機能を実写を用意せず試せるように、生成後に buildExifApp1 + insertJpegSegments で
  * 実データ（Make/Model/DateTimeOriginal/Orientation/GPS）入りの APP1 を差し込む。
+ *
+ * これは起動時に1回だけ走る軽い装飾的処理（1600×1067 の JPEG エンコード1回）であり、
+ * このタスクが対象とする「pixel 処理を worker に逃がす」対象（縮小・再エンコードのループ）
+ * ではないため、メインスレッドのまま残している。
  */
 export function generateSampleFile(): Promise<File> {
   return new Promise((resolve, reject) => {

@@ -89,7 +89,11 @@ WebP は EXIF / XMP / ICCP チャンクを読み飛ばすだけでは済まな�
 
 ブラウザは AVIF を「表示」はできても、`canvas.toBlob("image/avif")` で「書き出す」実装はどこにもない。AVIF を実データとして比較材料に出すには自前のエンコーダが要るため、`@jsquash/avif`（libavif を wasm 化したもの。Apache-2.0）をバンドルし、canvas から取り出した `ImageData` を直接エンコードしている。対応可否は他の形式のような `toBlob` probe ではなく `typeof WebAssembly === "object"` の一点で判定する。この wasm は `import("@jsquash/avif")` で AVIF を実際に使う瞬間まで読み込みを遅らせ、一度読み込んだモジュールは Promise ごとキャッシュして使い回す（AVIF を選ばないユーザーに wasm を配らないため）。1600px 級の画像で数秒かかるほど遅いため、比較表・COMPARISON_FORMATS の両方で常に最後に置き、フォーマット比較表では他の行を待たせず pending 行のまま先に確定させて後から差し替える（フォーマットノードにも「AVIF を変換中…」を出す）。選択中の出力形式が AVIF のときだけ、この同じ encode 結果を選択出力にも使い回し、二重にエンコードしない。
 
-### ヘッダー読み取りは 64 KiB
+### pixel 処理（リサイズ + 再エンコード）を worker に逃がす理由
+
+`encodeImage`（canvas への drawImage・toBlob、AVIF の wasm エンコード）はどれも大きな画像では数百ms〜数秒かかり、メインスレッドで実行するとその間ページ全体が固まる。`encode.worker.ts` に module worker を1体だけ遅延生成し、`OffscreenCanvas` 上で描画・エンコードまで完結させることで、UI（ノードのクリック・スライダー操作）を触れる状態に保ったまま処理する。パイプラインの各段は直列に呼ばれる設計（サイズ段 → フォーマット比較表も1件ずつ await する。上記「逐次エンコード」参照）で、複数の encode リクエストが同時に飛ぶことはないため、worker は1体で足りる。リクエストごとに作り直す・複数体持つ利点がなく、生成コストと（AVIF を選んだ場合の）wasm の二重ロードを避けられる。メインスレッドは `createImageBitmap(img)` でビットマップを作り、Transferable として worker へ move するだけに留め、画素データのコピーは発生させない。`OffscreenCanvas`/`Worker` が使えない環境（古い Safari 等）だけ `encodeImageMainThread`（`encode.ts`）にフォールバックし、メインスレッドで完結させる。メタデータ段（バイト列の読み飛ばし・再挿入）は画像全体のデコード・エンコードを伴わない軽い処理のため、worker へは移さずメインスレッドに残した。書き出し対応 probe（`detectFormatSupport`）も 1×1 canvas の軽い処理のままメインスレッドに残している。
+
+### AVIF だけ wasm エンコーダを積んでいる理由
 
 フォーマット判定と PNG IHDR は先頭 32 byte で足りるが、JPEG の Exif（APP1）セグメントは 16bit 長で最大 64 KiB になりうる。Orientation タグ・メタデータセグメント走査の両方が届くよう、ヘッダーはまとめて 64 KiB 読む。画像全体を ArrayBuffer に載せないのは、巨大ファイルでメモリを二重に持たないため。
 
@@ -103,7 +107,9 @@ asshukusan/
 ├── imageMeta.ts       マジックナンバー判定・PNG IHDR・透過検知・検品メタデータ組み立て（Exif は exif.ts に委譲）
 ├── exif.ts             JPEG/TIFF Exif の解析（IFD0/Exif IFD/GPS IFD）・固定長 in-place 編集・JPEG/PNG 共通の payload 抽出（extractExifPayload）・サンプル用 APP1 生成
 ├── metadataStrip.ts    メタデータセグメント/チャンクの検出・セグメント単位のロスレス除去・JPEG への再挿入（WebP は検出のみ）・PNG チャンクの CRC-32 再計算・セグメントの説明文/中身プレビュー
-├── encode.ts          長辺キャップ付きリサイズ・canvas 再エンコード・書き出し対応 probe・サンプル画像生成
+├── encode.ts          worker 呼び出し・メインスレッドフォールバック・書き出し対応 probe・サンプル画像生成
+├── encode.worker.ts    pixel 処理本体（OffscreenCanvas への描画・toBlob・AVIF wasm エンコード）を担う module worker
+├── encodeShared.ts     encode.ts と encode.worker.ts が共有する DOM 非依存の型・定数・寸法計算（computeTargetDims 等）
 ├── styles.css         :root テーマ上書き・ノードの入場アニメーション・比率バーの transition
 └── og.tsx             OGP カード用の画面ミニチュア（パイプラインのノード＋矢印＋比率バーを再現）
 ```
