@@ -1,87 +1,64 @@
 // OGP カード用の画面ミニチュア。satori (OGP) と通常の React 描画 (デモページ) の両方から
 // 使われるため inline style のみ・display は flex のみで組む（本体の main.ts は変更しない）。
 //
-// 本体（src/asshukusan/main.ts）は「元画像 → サイズ → フォーマット → メタデータ → 出力」の
-// 5ノードをポート付きのカードとして横に並べ、曲線のエッジで繋ぐノードフローエディタ風の
-// キャンバスを見せる。ミニチュアはヘッダー帯・ポート・エッジの太さという構造だけを
-// 抜き出して再現する（値の意味までは持たせない）。
-type PipelineNode = {
+// 本体はノードフローだが、1200×630 の右 60% に 5 ノードを横に並べると小さすぎて何のツールか
+// 読めない。OGP では「工程を経るごとにバイト数が減る」ことだけを伝えればよいので、
+// 工程を縦に積んだ棒グラフに置き換え、最終行に削減率を大きく出す。
+type StageRow = {
   label: string;
+  bytes: string;
+  /** 元画像を 1 としたバイト数の比率。棒の長さに使う */
+  ratio: number;
 };
 
-// 実物はエッジの太さがバイト数（元画像比）に比例して段を追うごとに細くなる。
-// ミニチュアでは同じ見た目を素の px 値で再現する（4本のエッジ = 5ノード間）
-const PIPELINE_NODES: PipelineNode[] = [
-  { label: '元画像' },
-  { label: 'サイズ' },
-  { label: 'フォーマット' },
-  { label: 'メタデータ' },
-  { label: '出力' },
+// 実写 2.4 MB を長辺 1600px の WebP にしたときの典型的な推移
+const STAGE_ROWS: StageRow[] = [
+  { label: '元画像', bytes: '2.4 MB', ratio: 1 },
+  { label: 'サイズ', bytes: '640 KB', ratio: 0.27 },
+  { label: 'フォーマット', bytes: '210 KB', ratio: 0.09 },
+  { label: 'メタデータ', bytes: '196 KB', ratio: 0.08 },
 ];
 
-const EDGE_WIDTHS = [5, 3.5, 2.5, 1.5];
+// U+2212（−）は Sawarabi Gothic の japanese サブセットに無く消えるため ASCII のハイフンを使う
+const OUTPUT = { bytes: '196 KB', delta: '-92%' };
 
-// ノード間を繋ぐ直線 + 太さで表現するエッジ。本体は曲線ベジェだが、
-// satori は矩形しか安定して描けないため、太さの変化だけを縮小して見せる
-function Edge({ width }: { width: number }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 22,
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ display: 'flex', width: 18, height: width, borderRadius: width, backgroundColor: '#c73e2e', opacity: 0.7 }} />
-    </div>
-  );
-}
+const LABEL_WIDTH = 126;
+const BYTES_WIDTH = 78;
+const BAR_TRACK_WIDTH = 314;
 
-function Port() {
+function StageBar({ row }: { row: StageRow }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        border: '2px solid #c73e2e',
-        backgroundColor: '#fbfaf6',
-      }}
-    />
-  );
-}
-
-function PipelineNodeBox({ node, isFirst, isLast }: { node: PipelineNode; isFirst: boolean; isLast: boolean }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: 108,
-        flexShrink: 0,
-        borderRadius: 6,
-        border: '1px solid rgba(140,133,123,0.35)',
-        backgroundColor: '#fff',
-        overflow: 'hidden',
-      }}
-    >
+    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 44 }}>
+      <div style={{ display: 'flex', width: LABEL_WIDTH, fontSize: 18, color: '#1f1b16' }}>{row.label}</div>
       <div
         style={{
           display: 'flex',
-          padding: '8px 8px',
-          backgroundColor: 'rgba(140,133,123,0.16)',
-          fontSize: 14,
-          color: '#1f1b16',
+          width: BAR_TRACK_WIDTH,
+          height: 14,
+          borderRadius: 7,
+          backgroundColor: 'rgba(140,133,123,0.18)',
         }}
       >
-        {node.label}
+        <div
+          style={{
+            display: 'flex',
+            width: Math.max(10, Math.round(BAR_TRACK_WIDTH * row.ratio)),
+            height: 14,
+            borderRadius: 7,
+            backgroundColor: '#c73e2e',
+          }}
+        />
       </div>
-      <div style={{ display: 'flex', padding: '10px 8px', justifyContent: isFirst ? 'flex-end' : isLast ? 'flex-start' : 'space-between' }}>
-        {!isFirst ? <Port /> : null}
-        {!isLast ? <Port /> : null}
+      <div
+        style={{
+          display: 'flex',
+          width: BYTES_WIDTH,
+          justifyContent: 'flex-end',
+          fontSize: 17,
+          color: '#7a7367',
+        }}
+      >
+        {row.bytes}
       </div>
     </div>
   );
@@ -101,13 +78,33 @@ export default function AsshukusanOgPreview() {
         justifyContent: 'center',
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
-        {PIPELINE_NODES.map((node, index) => (
-          <div key={node.label} style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
-            {index > 0 ? <Edge width={EDGE_WIDTHS[index - 1] ?? 1.5} /> : null}
-            <PipelineNodeBox node={node} isFirst={index === 0} isLast={index === PIPELINE_NODES.length - 1} />
-          </div>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '22px 26px',
+          borderRadius: 8,
+          border: '1px solid rgba(140,133,123,0.35)',
+          backgroundColor: '#ffffff',
+        }}
+      >
+        {STAGE_ROWS.map((row) => (
+          <StageBar key={row.label} row={row} />
         ))}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginTop: 10,
+            paddingTop: 14,
+            borderTop: '1px solid rgba(140,133,123,0.35)',
+          }}
+        >
+          <div style={{ display: 'flex', width: LABEL_WIDTH, fontSize: 18, color: '#1f1b16' }}>出力</div>
+          <div style={{ display: 'flex', fontSize: 30, color: '#1f1b16' }}>{OUTPUT.bytes}</div>
+          <div style={{ display: 'flex', marginLeft: 18, fontSize: 30, color: '#c73e2e' }}>{OUTPUT.delta}</div>
+        </div>
       </div>
     </div>
   );
