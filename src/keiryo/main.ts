@@ -56,41 +56,6 @@ appEl.innerHTML = `
     </section>
 
     <section id="result-section" class="hidden flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-x-5 gap-y-2 rounded border border-border bg-card px-3 py-2.5 text-xs text-muted-foreground">
-        <span class="text-sm font-semibold text-foreground">パラメータ</span>
-        <label class="flex items-center gap-2">
-          <span>品質</span>
-          <input type="range" id="quality" min="0.3" max="1" step="0.05" value="0.8" class="w-32 accent-primary" />
-          <span id="quality-value" class="w-10 shrink-0 font-mono text-foreground">0.80</span>
-        </label>
-        <label class="flex items-center gap-2">
-          <span>長辺の上限</span>
-          <select
-            id="long-edge"
-            class="rounded border border-border bg-background px-1.5 py-1 text-foreground"
-            aria-label="長辺の上限"
-          ></select>
-        </label>
-        <label class="flex items-center gap-2">
-          <span>出力形式</span>
-          <select
-            id="format-select"
-            class="rounded border border-border bg-background px-1.5 py-1 text-foreground"
-            aria-label="出力形式"
-          ></select>
-        </label>
-        <label class="flex items-center gap-1.5">
-          <input type="checkbox" id="strip-metadata" checked class="accent-primary" />
-          <span>メタデータ除去</span>
-        </label>
-        <a
-          id="download-button"
-          href="#"
-          aria-disabled="true"
-          class="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground opacity-50 transition-colors hover:opacity-90"
-        >ダウンロード</a>
-      </div>
-
       <div id="canvas" class="keiryo-canvas relative overflow-x-auto rounded border border-border">
         <div id="canvas-content" class="keiryo-canvas-content relative">
           <svg id="edges" class="keiryo-edges pointer-events-none absolute inset-0" aria-hidden="true"></svg>
@@ -107,12 +72,6 @@ const sampleButtonEl = document.getElementById("sample-button") as HTMLButtonEle
 const fileInputEl = document.getElementById("file-input") as HTMLInputElement;
 const errorEl = document.getElementById("error") as HTMLParagraphElement;
 const resultSectionEl = document.getElementById("result-section") as HTMLElement;
-const qualityInputEl = document.getElementById("quality") as HTMLInputElement;
-const qualityValueEl = document.getElementById("quality-value") as HTMLSpanElement;
-const longEdgeSelectEl = document.getElementById("long-edge") as HTMLSelectElement;
-const formatSelectEl = document.getElementById("format-select") as HTMLSelectElement;
-const stripMetadataCheckboxEl = document.getElementById("strip-metadata") as HTMLInputElement;
-const downloadButtonEl = document.getElementById("download-button") as HTMLAnchorElement;
 const canvasEl = document.getElementById("canvas") as HTMLDivElement;
 const canvasContentEl = document.getElementById("canvas-content") as HTMLDivElement;
 const edgesSvgEl = document.getElementById("edges") as unknown as SVGSVGElement;
@@ -279,6 +238,134 @@ function buildFormatSelectOptions(support: Record<ProbedFormat, boolean>, curren
       supported ? "" : "（書き出し不可）"
     }</option>`;
   }).join("");
+}
+
+// --- インスペクタカードのコントロール行 -----------------------------------
+// 各ステージ 1 回だけ DOM を生成し、再計算のたびに詳細パネルを再構築しても
+// コントロール自体（select/range/checkbox）はフォーカス・選択状態を保ったまま
+// 使い回す。詳細パネルの再描画では常にこの rootEl を先頭に append する。
+
+/** コントロール行の共通外枠（折り返す flex row + 下端の hairline） */
+function createControlsRow(): HTMLDivElement {
+  const rowEl = document.createElement("div");
+  rowEl.className = "flex flex-wrap items-center gap-3 border-b border-border pb-3 mb-3 text-xs";
+  return rowEl;
+}
+
+interface SizeControls {
+  rootEl: HTMLDivElement;
+  longEdgeSelectEl: HTMLSelectElement;
+  qualityInputEl: HTMLInputElement;
+  qualityValueEl: HTMLSpanElement;
+}
+
+function buildSizeControls(): SizeControls {
+  const rootEl = createControlsRow();
+  rootEl.innerHTML = `
+    <label class="flex items-center gap-2">
+      <span>長辺の上限</span>
+      <select
+        id="long-edge"
+        class="rounded border border-border bg-background px-1.5 py-1 text-foreground"
+        aria-label="長辺の上限"
+      ></select>
+    </label>
+    <label class="flex items-center gap-2">
+      <span>品質</span>
+      <input type="range" id="quality-size" min="0.3" max="1" step="0.05" value="0.8" class="w-32 accent-primary" />
+      <span id="quality-size-value" class="w-10 shrink-0 font-mono text-foreground">0.80</span>
+    </label>
+  `;
+  return {
+    rootEl,
+    longEdgeSelectEl: rootEl.querySelector("#long-edge") as HTMLSelectElement,
+    qualityInputEl: rootEl.querySelector("#quality-size") as HTMLInputElement,
+    qualityValueEl: rootEl.querySelector("#quality-size-value") as HTMLSpanElement,
+  };
+}
+
+interface FormatControls {
+  rootEl: HTMLDivElement;
+  formatSelectEl: HTMLSelectElement;
+  qualityInputEl: HTMLInputElement;
+  qualityValueEl: HTMLSpanElement;
+}
+
+function buildFormatControls(): FormatControls {
+  const rootEl = createControlsRow();
+  rootEl.innerHTML = `
+    <label class="flex items-center gap-2">
+      <span>出力形式</span>
+      <select
+        id="format-select"
+        class="rounded border border-border bg-background px-1.5 py-1 text-foreground"
+        aria-label="出力形式"
+      ></select>
+    </label>
+    <label class="flex items-center gap-2">
+      <span>品質</span>
+      <input type="range" id="quality-format" min="0.3" max="1" step="0.05" value="0.8" class="w-32 accent-primary" />
+      <span id="quality-format-value" class="w-10 shrink-0 font-mono text-foreground">0.80</span>
+    </label>
+  `;
+  return {
+    rootEl,
+    formatSelectEl: rootEl.querySelector("#format-select") as HTMLSelectElement,
+    qualityInputEl: rootEl.querySelector("#quality-format") as HTMLInputElement,
+    qualityValueEl: rootEl.querySelector("#quality-format-value") as HTMLSpanElement,
+  };
+}
+
+interface MetadataControls {
+  rootEl: HTMLDivElement;
+  checkboxEl: HTMLInputElement;
+}
+
+function buildMetadataControls(): MetadataControls {
+  const rootEl = createControlsRow();
+  rootEl.innerHTML = `
+    <label class="flex items-center gap-1.5">
+      <input type="checkbox" id="strip-metadata" checked class="accent-primary" />
+      <span>メタデータを除去</span>
+    </label>
+  `;
+  return { rootEl, checkboxEl: rootEl.querySelector("#strip-metadata") as HTMLInputElement };
+}
+
+interface OutputControls {
+  rootEl: HTMLDivElement;
+  downloadButtonEl: HTMLAnchorElement;
+}
+
+function buildOutputControls(): OutputControls {
+  const rootEl = createControlsRow();
+  rootEl.innerHTML = `
+    <a
+      id="download-button"
+      href="#"
+      aria-disabled="true"
+      class="pointer-events-none inline-flex shrink-0 items-center gap-1 rounded border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground opacity-50 transition-colors hover:opacity-90"
+    >ダウンロード</a>
+  `;
+  return { rootEl, downloadButtonEl: rootEl.querySelector("#download-button") as HTMLAnchorElement };
+}
+
+const sizeControls = buildSizeControls();
+const formatControls = buildFormatControls();
+const metadataControls = buildMetadataControls();
+const outputControls = buildOutputControls();
+
+/** サイズ・フォーマット両カードの品質 range を同期する（片方の入力で両方 + state を更新） */
+function setQuality(value: number, source?: HTMLInputElement): void {
+  state.quality = value;
+  const text = value.toFixed(2);
+  if (sizeControls.qualityInputEl !== source) sizeControls.qualityInputEl.value = String(value);
+  if (formatControls.qualityInputEl !== source) formatControls.qualityInputEl.value = String(value);
+  sizeControls.qualityValueEl.textContent = text;
+  formatControls.qualityValueEl.textContent = text;
+  updateFormatNode();
+  if (state.activeStage === "size") syncSizeLadderForQuality();
+  scheduleRecompute();
 }
 
 function createPort(side: "left" | "right"): HTMLDivElement {
@@ -625,18 +712,19 @@ function updateOutputNode(): void {
   els.deltaEl.textContent = formatDelta(pipeline.output.output.bytes, meta.bytes);
 }
 
-/** パラメータバーのダウンロードボタンを最新のパイプライン結果に合わせる（disabled 切り替え・href・ファイル名） */
+/** 出力カードのダウンロードボタンを最新のパイプライン結果に合わせる（計算中は disabled・href・ファイル名） */
 function updateDownloadButton(): void {
   const pipeline = state.pipeline;
-  if (!pipeline || !state.outputObjectUrl) {
-    downloadButtonEl.classList.add("pointer-events-none", "opacity-50");
-    downloadButtonEl.setAttribute("aria-disabled", "true");
+  const el = outputControls.downloadButtonEl;
+  if (!pipeline || !state.outputObjectUrl || state.computing) {
+    el.classList.add("pointer-events-none", "opacity-50");
+    el.setAttribute("aria-disabled", "true");
     return;
   }
-  downloadButtonEl.classList.remove("pointer-events-none", "opacity-50");
-  downloadButtonEl.removeAttribute("aria-disabled");
-  downloadButtonEl.href = state.outputObjectUrl;
-  downloadButtonEl.download = pipeline.output.detail.downloadName;
+  el.classList.remove("pointer-events-none", "opacity-50");
+  el.removeAttribute("aria-disabled");
+  el.href = state.outputObjectUrl;
+  el.download = pipeline.output.detail.downloadName;
 }
 
 /** ノード本文・エッジの太さ/ラベル・レイアウトをまとめて更新する（要素は作り直さない） */
@@ -658,22 +746,55 @@ function renderNodes(): void {
 
 // --- 詳細パネル -------------------------------------------------------------
 // マークアップの組み立ては pipeline.ts の build*Html / *StatusText 関数に寄せ、
-// ここでは innerHTML への反映（＝ DOM 固有の処理）だけを担う。パラメータ操作は
-// すべてパラメータバー側の要素が担うため、詳細パネル側にイベント登録は不要。
+// ここでは innerHTML への反映（＝ DOM 固有の処理）だけを担う。各カードの操作系は
+// buildXControls() が一度だけ作った持続 DOM（sizeControls 等）が担い、ここでは
+// 再計算のたびに detailPanelEl へ「controls.rootEl → 内容 div」の順で差し替えるだけ
+// で、controls 要素自体は作り直さない（フォーカス・入力途中の値を失わないため）。
+
+/** 詳細パネルの内容 div を組み立てる（innerHTML はこの使い捨て div にだけ設定する） */
+function buildDetailContentEl(className: string, html: string): HTMLDivElement {
+  const el = document.createElement("div");
+  el.className = className;
+  el.innerHTML = html;
+  return el;
+}
+
+/**
+ * 詳細パネルへ controls（あれば）+ content を差し込む。controls が既に先頭子要素として
+ * 接続済みなら触らず content だけ差し替える。replaceChildren は一旦全子要素を外してから
+ * 積み直すため、毎回 controls ごと入れ直すとフォーカス中の select/input が同期的に
+ * デタッチされてフォーカスを失う。再計算のたびに同じカードを再描画するケース
+ * （品質スライダー操作中の debounce recompute 等）で入力を落とさないための対処
+ */
+function renderDetailCard(controlsRootEl: HTMLElement | null, contentEl: HTMLElement): void {
+  if (!controlsRootEl) {
+    detailPanelEl.replaceChildren(contentEl);
+    return;
+  }
+  if (detailPanelEl.firstElementChild === controlsRootEl) {
+    const oldContentEl = detailPanelEl.children[1];
+    if (oldContentEl) detailPanelEl.replaceChild(contentEl, oldContentEl);
+    else detailPanelEl.append(contentEl);
+    return;
+  }
+  detailPanelEl.replaceChildren(controlsRootEl, contentEl);
+}
 
 function renderOriginalDetail(): void {
   const meta = state.meta;
   if (!meta || !state.objectUrl) return;
-  detailPanelEl.innerHTML = `
-    <div class="flex flex-col gap-4 sm:flex-row">
+  const contentEl = buildDetailContentEl(
+    "flex flex-col gap-4 sm:flex-row",
+    `
       <img
         src="${state.objectUrl}"
         alt="読み込んだ画像のサムネイル"
         class="max-h-[140px] w-auto max-w-[200px] shrink-0 rounded border border-border object-contain"
       />
       <div class="min-w-0 flex-1">${buildOriginalDetailHtml(meta)}</div>
-    </div>
-  `;
+    `,
+  );
+  detailPanelEl.replaceChildren(contentEl);
 }
 
 function renderSizeDetail(): void {
@@ -686,63 +807,79 @@ function renderSizeDetail(): void {
   const ladderHtml = state.sizeLadderRows
     ? `<div class="flex flex-col">${buildSizeLadderHtml(state.sizeLadderRows, state.longEdgeCap)}</div>`
     : `<p class="text-xs text-muted-foreground">長辺ごとの比較を計算中…</p>`;
-  detailPanelEl.innerHTML = `
-    ${pipelineHtml}
-    <div class="flex flex-col gap-1.5 pt-2">
-      <span class="text-xs font-semibold text-muted-foreground">長辺ごとの比較（同じ品質・同じ形式で what-if）</span>
-      ${ladderHtml}
-    </div>
-  `;
+  const contentEl = buildDetailContentEl(
+    "flex flex-col gap-1.5",
+    `
+      ${pipelineHtml}
+      <div class="flex flex-col gap-1.5 pt-2">
+        <span class="text-xs font-semibold text-muted-foreground">長辺ごとの比較（同じ品質・同じ形式で what-if）</span>
+        ${ladderHtml}
+      </div>
+    `,
+  );
+  renderDetailCard(sizeControls.rootEl, contentEl);
 }
 
 function renderFormatDetail(): void {
   const pipeline = state.pipeline;
   if (!pipeline) {
-    detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
+    renderDetailCard(formatControls.rootEl, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
     return;
   }
   const dims = { width: pipeline.size.output.width, height: pipeline.size.output.height };
-  detailPanelEl.innerHTML = `
-    <div class="flex flex-col">${buildFormatComparisonHtml(pipeline.format.detail.comparison, dims, pipeline.format.detail.highlightFormat)}</div>
-    ${pipeline.format.detail.qualityIgnored ? `<p class="text-xs text-muted-foreground">PNG は可逆圧縮のため品質は効きません。</p>` : ""}
-  `;
+  const contentEl = buildDetailContentEl(
+    "flex flex-col gap-1.5",
+    `
+      <div class="flex flex-col">${buildFormatComparisonHtml(pipeline.format.detail.comparison, dims, pipeline.format.detail.highlightFormat)}</div>
+      ${pipeline.format.detail.qualityIgnored ? `<p class="text-xs text-muted-foreground">PNG は可逆圧縮のため品質は効きません。</p>` : ""}
+    `,
+  );
+  renderDetailCard(formatControls.rootEl, contentEl);
 }
 
 function renderMetadataDetail(): void {
   const pipeline = state.pipeline;
   if (!pipeline) {
-    detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
+    renderDetailCard(metadataControls.rootEl, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
     return;
   }
   const d = pipeline.metadata.detail;
-  detailPanelEl.innerHTML = `
-    <div class="flex items-baseline justify-between gap-3 border-b border-border py-1.5 text-sm">
-      <span class="font-semibold text-foreground">メタデータ合計</span>
-      <span class="font-mono text-xs text-foreground">${formatBytes(d.scan.totalBytes)}</span>
-    </div>
-    <div class="flex flex-col">${buildMetadataSegmentsHtml(d.scan)}</div>
-    <p class="text-xs text-muted-foreground">${metadataStatusText(d)}</p>
-  `;
+  const contentEl = buildDetailContentEl(
+    "flex flex-col gap-1.5",
+    `
+      <div class="flex items-baseline justify-between gap-3 border-b border-border py-1.5 text-sm">
+        <span class="font-semibold text-foreground">メタデータ合計</span>
+        <span class="font-mono text-xs text-foreground">${formatBytes(d.scan.totalBytes)}</span>
+      </div>
+      <div class="flex flex-col">${buildMetadataSegmentsHtml(d.scan)}</div>
+      <p class="text-xs text-muted-foreground">${metadataStatusText(d)}</p>
+    `,
+  );
+  renderDetailCard(metadataControls.rootEl, contentEl);
 }
 
 function renderOutputDetail(): void {
   const meta = state.meta;
   const pipeline = state.pipeline;
   if (!meta || !pipeline || !state.objectUrl || !state.outputObjectUrl) {
-    detailPanelEl.innerHTML = `<p class="text-xs text-muted-foreground">計算中…</p>`;
+    renderDetailCard(outputControls.rootEl, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
     return;
   }
   const d = pipeline.output.detail;
-  detailPanelEl.innerHTML = `
-    <div class="flex flex-col gap-1.5 text-sm">${buildOutputInfoHtml(d)}</div>
-    <div class="flex flex-col gap-1.5">
-      <span class="text-xs font-semibold text-muted-foreground">元と比べる</span>
-      <div class="flex flex-wrap gap-3">
-        <img src="${state.objectUrl}" alt="変換前" class="max-h-[240px] w-auto max-w-[45%] rounded border border-border object-contain" />
-        <img src="${state.outputObjectUrl}" alt="変換後" class="max-h-[240px] w-auto max-w-[45%] rounded border border-border object-contain" />
+  const contentEl = buildDetailContentEl(
+    "flex flex-col gap-3",
+    `
+      <div class="flex flex-col gap-1.5 text-sm">${buildOutputInfoHtml(d)}</div>
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-semibold text-muted-foreground">元と比べる</span>
+        <div class="flex flex-wrap gap-3">
+          <img src="${state.objectUrl}" alt="変換前" class="max-h-[240px] w-auto max-w-[45%] rounded border border-border object-contain" />
+          <img src="${state.outputObjectUrl}" alt="変換後" class="max-h-[240px] w-auto max-w-[45%] rounded border border-border object-contain" />
+        </div>
       </div>
-    </div>
-  `;
+    `,
+  );
+  renderDetailCard(outputControls.rootEl, contentEl);
 }
 
 function renderDetailPanel(): void {
@@ -914,11 +1051,13 @@ async function handleFileSelected(file: File): Promise<void> {
     state.avifComparisonPending = false;
     state.sizeLadderCache = new Map();
     state.sizeLadderRows = null;
-    qualityInputEl.value = "0.8";
-    qualityValueEl.textContent = "0.80";
-    longEdgeSelectEl.innerHTML = buildLongEdgeOptionsHtml(meta, null);
-    formatSelectEl.innerHTML = buildFormatSelectOptions(support, "original");
-    stripMetadataCheckboxEl.checked = true;
+    sizeControls.qualityInputEl.value = "0.8";
+    formatControls.qualityInputEl.value = "0.8";
+    sizeControls.qualityValueEl.textContent = "0.80";
+    formatControls.qualityValueEl.textContent = "0.80";
+    sizeControls.longEdgeSelectEl.innerHTML = buildLongEdgeOptionsHtml(meta, null);
+    formatControls.formatSelectEl.innerHTML = buildFormatSelectOptions(support, "original");
+    metadataControls.checkboxEl.checked = true;
 
     resultSectionEl.classList.remove("hidden");
     resultSectionEl.classList.add("flex");
@@ -987,31 +1126,29 @@ sampleButtonEl.addEventListener("click", () => {
     });
 });
 
-qualityInputEl.addEventListener("input", () => {
-  state.quality = Number.parseFloat(qualityInputEl.value);
-  qualityValueEl.textContent = state.quality.toFixed(2);
-  updateFormatNode();
-  if (state.activeStage === "size") syncSizeLadderForQuality();
-  scheduleRecompute();
+sizeControls.qualityInputEl.addEventListener("input", () => {
+  setQuality(Number.parseFloat(sizeControls.qualityInputEl.value), sizeControls.qualityInputEl);
 });
 
-longEdgeSelectEl.addEventListener("change", () => {
-  state.longEdgeCap = longEdgeSelectEl.value ? Number.parseInt(longEdgeSelectEl.value, 10) : null;
+formatControls.qualityInputEl.addEventListener("input", () => {
+  setQuality(Number.parseFloat(formatControls.qualityInputEl.value), formatControls.qualityInputEl);
+});
+
+sizeControls.longEdgeSelectEl.addEventListener("change", () => {
+  state.longEdgeCap = sizeControls.longEdgeSelectEl.value ? Number.parseInt(sizeControls.longEdgeSelectEl.value, 10) : null;
   if (state.activeStage === "size") renderDetailPanel();
   scheduleRecompute();
 });
 
-formatSelectEl.addEventListener("change", () => {
-  state.formatChoice = formatSelectEl.value as FormatChoice;
+formatControls.formatSelectEl.addEventListener("change", () => {
+  state.formatChoice = formatControls.formatSelectEl.value as FormatChoice;
   scheduleRecompute();
 });
 
-stripMetadataCheckboxEl.addEventListener("change", () => {
-  state.stripMetadataEnabled = stripMetadataCheckboxEl.checked;
+metadataControls.checkboxEl.addEventListener("change", () => {
+  state.stripMetadataEnabled = metadataControls.checkboxEl.checked;
   scheduleRecompute();
 });
-
-qualityValueEl.textContent = state.quality.toFixed(2);
 
 window.addEventListener("resize", () => {
   if (!state.meta) return;
