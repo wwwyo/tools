@@ -122,6 +122,8 @@ function layoutNodes(): void {
   });
 }
 const EDGE_CURVE_OFFSET = 60;
+/** エッジラベルの下端をノード上端からどれだけ離すか（px） */
+const EDGE_LABEL_GAP = 10;
 const EDGE_MIN_STROKE = 1.5;
 const EDGE_MAX_STROKE = 8;
 
@@ -484,11 +486,12 @@ function layoutEdges(): void {
       `M ${p1x} ${p1y} C ${p1x + EDGE_CURVE_OFFSET} ${p1y}, ${p2x - EDGE_CURVE_OFFSET} ${p2y}, ${p2x} ${p2y}`,
     );
 
-    // 3次ベジェの t=0.5 は y1=y2 のとき単純な中点に一致する
+    // ラベルはエッジ中点の真上ではなく、両ノードの上端より上に逃がす。ノード間の隙間は
+    // 20px 程度しかなく、中点に置くと隣のノード本体（select 等）に被って読めないため
     const midX = (p1x + p2x) / 2;
-    const midY = (p1y + p2y) / 2;
+    const rowTop = Math.min(fromEls.rootEl.offsetTop, toEls.rootEl.offsetTop);
     edge.labelEl.style.left = `${midX}px`;
-    edge.labelEl.style.top = `${midY}px`;
+    edge.labelEl.style.top = `${rowTop - EDGE_LABEL_GAP}px`;
   }
 }
 

@@ -88,7 +88,8 @@
 
 .keiryo-edge-label {
   position: absolute;
-  transform: translate(-50%, -50%);
+  /* top はノード上端からの距離なので、ラベルの下端をそこに合わせる */
+  transform: translate(-50%, -100%);
   white-space: nowrap;
 }
 
