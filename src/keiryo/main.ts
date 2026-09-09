@@ -21,7 +21,7 @@ if (!appEl) {
   throw new Error("app element not found");
 }
 
-const DESCRIPTION = "画像を検品して、拡張子ごとの圧縮結果を見比べられます。";
+const DESCRIPTION = "画像の圧縮率を拡張子ごとに比較します。";
 
 appEl.innerHTML = `
   <main class="mx-auto flex max-w-3xl flex-col gap-8 px-5 py-10">
