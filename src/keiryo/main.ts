@@ -218,6 +218,8 @@ interface AppState {
   pipeline: PipelineResult | null;
   support: Record<ProbedFormat, boolean> | null;
   computing: boolean;
+  /** フォーマット比較表の AVIF 行がまだ wasm エンコード中かどうか（フォーマットノードの表示に使う） */
+  avifComparisonPending: boolean;
   outputObjectUrl: string | null;
   nodeEls: NodeElsMap;
   edgeEls: EdgeEls[];
@@ -240,6 +242,7 @@ const state: AppState = {
   pipeline: null,
   support: null,
   computing: false,
+  avifComparisonPending: false,
   outputObjectUrl: null,
   nodeEls: {},
   edgeEls: [],
@@ -587,7 +590,8 @@ function updateFormatNode(): void {
   }
   const d = pipeline.format.detail;
   const formatText = d.passthrough ? `${d.chosenLabel}（元のまま）` : `${d.fromLabel} → ${d.chosenLabel}`;
-  els.summaryEl.textContent = `${formatText}\n品質 ${state.quality.toFixed(2)}`;
+  const avifNote = state.avifComparisonPending ? "\nAVIF を変換中…" : "";
+  els.summaryEl.textContent = `${formatText}\n品質 ${state.quality.toFixed(2)}${avifNote}`;
 }
 
 function updateMetadataNode(): void {
@@ -781,6 +785,36 @@ function updateOutputObjectUrl(): void {
 let pipelineRunning = false;
 let rerunRequested = false;
 
+/**
+ * フォーマット比較表の AVIF 行（pending）を、wasm エンコードが確定した時点で差し替える。
+ * runPipeline 自体は AVIF の確定を待たずに解決しているため、この監視は別系統で走らせる。
+ * result はパイプライン結果ごとに新しいオブジェクトなので、参照比較で古い結果からの反映を弾く。
+ */
+function watchAvifComparison(result: PipelineResult): void {
+  const avifPending = result.format.detail.avifPending;
+  if (!avifPending) {
+    state.avifComparisonPending = false;
+    return;
+  }
+  state.avifComparisonPending = true;
+  avifPending
+    .then((row) => {
+      if (state.pipeline !== result) return;
+      const comparison = result.format.detail.comparison;
+      const index = comparison.findIndex((r) => r.format === "avif");
+      if (index !== -1) comparison[index] = row;
+      state.avifComparisonPending = false;
+      renderNodes();
+      if (state.activeStage === "format") renderDetailPanel();
+    })
+    .catch((error: unknown) => {
+      console.error(error);
+      if (state.pipeline !== result) return;
+      state.avifComparisonPending = false;
+      renderNodes();
+    });
+}
+
 async function runPipelineOnce(): Promise<void> {
   const meta = state.meta;
   const image = state.image;
@@ -807,6 +841,7 @@ async function runPipelineOnce(): Promise<void> {
     });
     if (state.meta !== meta) return;
     state.pipeline = result;
+    watchAvifComparison(result);
   } catch (error) {
     console.error(error);
     showError("画像の変換に失敗しました。別の画像やパラメータで試してください。");
@@ -876,6 +911,7 @@ async function handleFileSelected(file: File): Promise<void> {
     state.stripMetadataEnabled = true;
     state.activeStage = "original";
     state.pipeline = null;
+    state.avifComparisonPending = false;
     state.sizeLadderCache = new Map();
     state.sizeLadderRows = null;
     qualityInputEl.value = "0.8";

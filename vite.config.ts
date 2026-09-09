@@ -353,6 +353,10 @@ function sitemapPlugin(): Plugin {
 export default defineConfig({
   root: 'src',
   server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
+  // @jsquash/avif の emscripten グルーコードは `new URL('avif_enc.wasm', import.meta.url)` で自身の
+  // wasm を相対解決する。dev の esbuild pre-bundle がこのモジュールをキャッシュへコピーすると
+  // import.meta.url がコピー先を指してしまい wasm の相対パスが壊れるため、pre-bundle 対象から外す
+  optimizeDeps: { exclude: ['@jsquash/avif'] },
   plugins: [
     faviconPlugin(),
     headerPlugin(),

@@ -68,12 +68,30 @@ export async function detectFormatSupport(): Promise<Record<ProbedFormat, boolea
     return blob !== null && blob.type === mime;
   }
 
-  const [jpeg, webp, avif] = await Promise.all([
-    supports(FORMAT_MIME.jpeg),
-    supports(FORMAT_MIME.webp),
-    supports(FORMAT_MIME.avif),
-  ]);
+  const [jpeg, webp] = await Promise.all([supports(FORMAT_MIME.jpeg), supports(FORMAT_MIME.webp)]);
+  // canvas.toBlob は AVIF を書き出せる実装が無いため probe しない。@jsquash/avif の wasm エンコーダに
+  // 切り替えているので、対応可否は WebAssembly が動くかどうかだけで決まる
+  const avif = typeof WebAssembly === "object";
   return { jpeg, webp, avif };
+}
+
+// @jsquash/avif は wasm を読み込むため、AVIF を実際に使うツールでだけ import したい。
+// モジュール Promise をキャッシュし、複数回 AVIF を選んでも読み込みは初回の1回だけにする
+let avifModulePromise: Promise<typeof import("@jsquash/avif")> | null = null;
+
+function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
+  if (!avifModulePromise) {
+    avifModulePromise = import("@jsquash/avif");
+  }
+  return avifModulePromise;
+}
+
+/** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
+async function encodeAvif(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, quality: number): Promise<Blob> {
+  const { encode } = await loadAvifEncoder();
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
+  return new Blob([buf], { type: FORMAT_MIME.avif });
 }
 
 /**
@@ -91,6 +109,11 @@ export async function encodeImage(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas 2d context を取得できませんでした");
   ctx.drawImage(img, 0, 0, dims.width, dims.height);
+
+  if (opts.format === "avif") {
+    const blob = await encodeAvif(canvas, ctx, opts.quality);
+    return { blob, width: dims.width, height: dims.height };
+  }
 
   const mime = FORMAT_MIME[opts.format];
   const blob = await canvasToBlob(canvas, mime, opts.quality);

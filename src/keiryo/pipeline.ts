@@ -14,6 +14,7 @@ import {
   computeTargetDims,
   encodeImage,
   extensionFor,
+  type EncodeResult,
   type OutputFormat,
   type ProbedFormat,
 } from "./encode";
@@ -90,6 +91,8 @@ export interface FormatComparisonRow {
   supported: boolean;
   bytes: number | null;
   delta: string | null;
+  /** AVIF は wasm エンコードに数秒かかるため、確定するまでこの行だけ「変換中」で先に表示する */
+  pending?: boolean;
 }
 
 export interface FormatStageDetail {
@@ -101,6 +104,8 @@ export interface FormatStageDetail {
   highlightFormat: OutputFormat;
   comparison: FormatComparisonRow[];
   qualityIgnored: boolean;
+  /** comparison の AVIF 行が pending のときだけ非 null。解決すると確定行が届く（呼び出し側が comparison を差し替える） */
+  avifPending: Promise<FormatComparisonRow> | null;
 }
 
 export interface MetadataStageDetail {
@@ -198,7 +203,15 @@ async function computeSizeStage(params: PipelineParams): Promise<{ output: Stage
   };
 }
 
+// AVIF を最後に置くのは表示上の意味だけでなく、逐次 await するこの後の実装が
+// 「他形式を先に確定させてから AVIF に着手する」順序を保証するためでもある
 const COMPARISON_FORMATS: readonly OutputFormat[] = ["jpeg", "webp", "png", "avif"];
+
+/** AVIF の wasm エンコード結果。比較表の確定行と、選択出力用の blob/寸法を両方持つ */
+interface AvifEncodeOutcome {
+  row: FormatComparisonRow;
+  result: EncodeResult;
+}
 
 async function computeFormatStage(
   params: PipelineParams,
@@ -207,12 +220,29 @@ async function computeFormatStage(
   const { image, quality, longEdgeCap, formatChoice, support } = params;
 
   // 比較表は選択中の出力形式に関わらず、対応している全形式分を都度求める。
-  // Promise.all にはせず1件ずつ await する（サイズ段と同じ理由でメモリを一気に食わないため）
+  // Promise.all にはせず1件ずつ await する（サイズ段と同じ理由でメモリを一気に食わないため）。
+  // ただし AVIF だけは wasm エンコードが 1600px で数秒かかり、他の行を待たせたくないため
+  // ここでは encode を投げっぱなしにし、pending 行を積んでこのステージ自体は先に確定させる。
   const comparison: FormatComparisonRow[] = [];
+  let avifOutcomePromise: Promise<AvifEncodeOutcome> | null = null;
   for (const format of COMPARISON_FORMATS) {
     const supported = isFormatSupported(format, support);
     if (!supported) {
       comparison.push({ format, label: FORMAT_LABELS[format], supported: false, bytes: null, delta: null });
+      continue;
+    }
+    if (format === "avif") {
+      comparison.push({ format, label: FORMAT_LABELS[format], supported: true, bytes: null, delta: null, pending: true });
+      avifOutcomePromise = encodeImage(image, { format, quality, longEdgeCap }).then((result) => ({
+        result,
+        row: {
+          format,
+          label: FORMAT_LABELS[format],
+          supported: true,
+          bytes: result.blob.size,
+          delta: formatDelta(result.blob.size, sizeOutput.bytes),
+        },
+      }));
       continue;
     }
     const result = await encodeImage(image, { format, quality, longEdgeCap });
@@ -224,6 +254,7 @@ async function computeFormatStage(
       delta: formatDelta(result.blob.size, sizeOutput.bytes),
     });
   }
+  const avifPending = avifOutcomePromise ? avifOutcomePromise.then((outcome) => outcome.row) : null;
 
   // 比較表で光らせる行。「元のまま」でも sizeOutput の実形式（素通しなら sniff 結果）に
   // マップし、必ずどこかの行が「今これ」を指すようにする
@@ -246,6 +277,32 @@ async function computeFormatStage(
         highlightFormat,
         comparison,
         qualityIgnored: false,
+        avifPending,
+      },
+    };
+  }
+
+  if (formatChoice === "avif") {
+    if (!avifOutcomePromise) throw new Error("AVIF は書き出せません");
+    // 比較表用に投げた encode をそのまま選択出力にも使い回す（同じ quality/longEdgeCap なので二重エンコードを避ける）
+    const outcome = await avifOutcomePromise;
+    return {
+      output: {
+        blob: outcome.result.blob,
+        bytes: outcome.row.bytes ?? outcome.result.blob.size,
+        width: outcome.result.width,
+        height: outcome.result.height,
+        fromCanvas: true,
+        format: "avif",
+      },
+      detail: {
+        passthrough: false,
+        fromLabel,
+        chosenLabel: FORMAT_LABELS.avif,
+        highlightFormat,
+        comparison,
+        qualityIgnored: false,
+        avifPending,
       },
     };
   }
@@ -268,6 +325,7 @@ async function computeFormatStage(
       highlightFormat,
       comparison,
       qualityIgnored: formatChoice === "png",
+      avifPending,
     },
   };
 }
@@ -389,11 +447,21 @@ interface BarRow {
   highlighted: boolean;
   /** 最大行に対する比率（0〜1）。scaleX の transform に使う */
   scale: number;
+  /** AVIF の wasm エンコードが完了していない間だけ true */
+  pending?: boolean;
 }
 
 /** label | 寸法(mono) | 容量(mono) | 差分%(mono, primary) | 比例バー の1行を組み立てる */
 function buildBarRowHtml(row: BarRow): string {
   const highlightClass = row.highlighted ? " bg-muted/60" : "";
+  if (row.pending) {
+    return (
+      `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
+      `<span class="w-16 shrink-0 font-semibold text-foreground">${row.label}</span>` +
+      `<span class="flex-1 text-xs text-muted-foreground">AVIF を変換中…</span>` +
+      `</div>`
+    );
+  }
   if (!row.supported) {
     return (
       `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
@@ -430,6 +498,7 @@ export function buildFormatComparisonHtml(
     supported: row.supported,
     highlighted: row.format === highlightFormat,
     scale: row.supported && row.bytes != null && maxBytes > 0 ? row.bytes / maxBytes : 0,
+    pending: row.pending,
   }));
   return rows.map(buildBarRowHtml).join("");
 }
