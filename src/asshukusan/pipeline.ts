@@ -18,8 +18,18 @@ import {
   type OutputFormat,
   type ProbedFormat,
 } from "./encode";
-import { scanMetadata, stripMetadata, insertJpegSegments, type MetadataScanResult, type MetadataSegment } from "./metadataStrip";
-import { applyExifEdits, type ExifEdits } from "./exif";
+import {
+  scanMetadata,
+  stripMetadata,
+  insertJpegSegments,
+  pngChunkDataRange,
+  patchPngChunkData,
+  segmentDescription,
+  segmentContentPreview,
+  type MetadataScanResult,
+  type MetadataSegment,
+} from "./metadataStrip";
+import { applyExifEdits, EXIF_PAYLOAD_HEADER, type ExifEdits } from "./exif";
 
 /** 元ファイルの実形式から、そのまま同形式で再エンコードする際に使う出力形式へ落とす */
 const SNIFFED_TO_REENCODE_FORMAT: Record<string, OutputFormat> = {
@@ -103,8 +113,6 @@ export interface FormatStageDetail {
   /** フォーマット段に入ってきた時点の形式ラベル（ノードの「JPEG → WebP」表示の左側に使う） */
   fromLabel: string;
   chosenLabel: string;
-  /** 比較表で「今これ」を強調する行の判定に使う（passthrough でも元の実形式にマップして1行は必ず光らせる） */
-  highlightFormat: OutputFormat;
   comparison: FormatComparisonRow[];
   qualityIgnored: boolean;
   /** comparison の AVIF 行が pending のときだけ非 null。解決すると確定行が届く（呼び出し側が comparison を差し替える） */
@@ -272,15 +280,6 @@ async function computeFormatStage(
   }
   const avifPending = avifOutcomePromise ? avifOutcomePromise.then((outcome) => outcome.row) : null;
 
-  // 比較表で光らせる行。「元のまま」でも sizeOutput の実形式（素通しなら sniff 結果）に
-  // マップし、必ずどこかの行が「今これ」を指すようにする
-  const highlightFormat: OutputFormat =
-    formatChoice === "original"
-      ? sizeOutput.format === "original"
-        ? originalReencodeFormat(params.meta.sniffedFormat)
-        : sizeOutput.format
-      : formatChoice;
-
   const fromLabel = currentFormatLabel(sizeOutput.format, params.meta.ext);
 
   if (formatChoice === "original") {
@@ -290,7 +289,6 @@ async function computeFormatStage(
         passthrough: true,
         fromLabel,
         chosenLabel: fromLabel,
-        highlightFormat,
         comparison,
         qualityIgnored: false,
         avifPending,
@@ -315,7 +313,6 @@ async function computeFormatStage(
         passthrough: false,
         fromLabel,
         chosenLabel: FORMAT_LABELS.avif,
-        highlightFormat,
         comparison,
         qualityIgnored: false,
         avifPending,
@@ -338,7 +335,6 @@ async function computeFormatStage(
       passthrough: false,
       fromLabel,
       chosenLabel: FORMAT_LABELS[formatChoice],
-      highlightFormat,
       comparison,
       qualityIgnored: formatChoice === "png",
       avifPending,
@@ -353,17 +349,37 @@ const CARRY_SEGMENT_NAMES = new Set(["APP1 Exif", "APP1 XMP", "COM"]);
  * 元バッファのコピーへ、残す（除去しない）Exif セグメントがあれば固定長編集を in-place で
  * 焼き込む。編集はサイズを変えないため、以降 scan.segments の start/end はそのまま使い回せる。
  * 対象の Exif セグメントが無ければ元バッファをそのまま返す（コピー不要）。
+ *
+ * JPEG の APP1 Exif は payload が "Exif\0\0" + TIFF のまま並んでいるので in-place 上書きで足りるが、
+ * PNG の eXIf チャンクは中身が生 TIFF（"Exif\0\0" 無し）で、かつ CRC を持つため上書き後に再計算が要る。
+ * exif.ts のパーサーは JPEG の "Exif\0\0" 付き payload を前提にしているため、PNG の場合だけ
+ * 編集の間だけ疑似ヘッダーを被せて共通コードに通し、書き戻すときに剥がす。
  */
 function buildEditedOriginalBuffer(originalArrayBuffer: ArrayBuffer, scan: MetadataScanResult, edits: ExifEdits): ArrayBuffer {
-  const exifSeg = scan.segments.find((s) => s.name === "APP1 Exif");
-  if (!exifSeg) return originalArrayBuffer;
-  const copy = originalArrayBuffer.slice(0);
-  const bytes = new Uint8Array(copy);
-  const payloadStart = exifSeg.start + 4; // マーカー(2) + 長さ(2) を読み飛ばす
-  const payload = bytes.subarray(payloadStart, exifSeg.end);
-  const edited = applyExifEdits(payload, edits);
-  bytes.set(edited.subarray(0, payload.length), payloadStart);
-  return copy;
+  const jpegExifSeg = scan.segments.find((s) => s.name === "APP1 Exif");
+  if (jpegExifSeg) {
+    const copy = originalArrayBuffer.slice(0);
+    const bytes = new Uint8Array(copy);
+    const payloadStart = jpegExifSeg.start + 4; // マーカー(2) + 長さ(2) を読み飛ばす
+    const payload = bytes.subarray(payloadStart, jpegExifSeg.end);
+    const edited = applyExifEdits(payload, edits);
+    bytes.set(edited.subarray(0, payload.length), payloadStart);
+    return copy;
+  }
+
+  const pngExifSeg = scan.segments.find((s) => s.name === "eXIf");
+  if (pngExifSeg) {
+    const { dataStart, dataEnd } = pngChunkDataRange(pngExifSeg);
+    const tiff = new Uint8Array(originalArrayBuffer).subarray(dataStart, dataEnd);
+    const pseudoPayload = new Uint8Array(EXIF_PAYLOAD_HEADER.length + tiff.length);
+    pseudoPayload.set(EXIF_PAYLOAD_HEADER, 0);
+    pseudoPayload.set(tiff, EXIF_PAYLOAD_HEADER.length);
+    const edited = applyExifEdits(pseudoPayload, edits);
+    const editedTiff = edited.subarray(EXIF_PAYLOAD_HEADER.length);
+    return patchPngChunkData(originalArrayBuffer, pngExifSeg, editedTiff);
+  }
+
+  return originalArrayBuffer;
 }
 
 function segmentBytesSum(scan: MetadataScanResult, predicate: (s: MetadataSegment) => boolean): number {
@@ -536,83 +552,130 @@ export async function computeSizeLadder(
 // --- 比較テーブルの棒グラフ行（フォーマット比較・サイズラダー共通） -------------------
 
 interface BarRow {
+  /** data-value としてボタンに載せる安定な値（select の option value に相当） */
+  value: string;
   label: string;
   dims: string;
   bytes: number | null;
   delta: string | null;
-  supported: boolean;
+  disabled: boolean;
+  /** disabled のとき、寸法/容量/差分/バーの代わりに表示する理由文 */
+  disabledReason: string | null;
   highlighted: boolean;
   /** 最大行に対する比率（0〜1）。scaleX の transform に使う */
   scale: number;
-  /** AVIF の wasm エンコードが完了していない間だけ true */
+  /** AVIF の wasm エンコードが完了していない間だけ true（disabled ではなく選択自体は可能） */
   pending?: boolean;
 }
 
-/** label | 寸法(mono) | 容量(mono) | 差分%(mono, primary) | 比例バー の1行を組み立てる */
+/**
+ * label | 寸法(mono) | 容量(mono) | 差分%(mono, primary) | 比例バー の1行を、行全体をヒットエリアに
+ * 持つ radio ボタンとして組み立てる（サイズ・フォーマット両カードの what-if 行で共有する）。
+ * button の content model は phrasing content のため、バーの入れ物・塗りは div ではなく span を使う。
+ */
 function buildBarRowHtml(row: BarRow): string {
-  const highlightClass = row.highlighted ? " bg-muted/60" : "";
+  const stateClass = row.highlighted ? " border-primary bg-muted" : " border-transparent";
+  const interactionClass = row.disabled ? " cursor-not-allowed opacity-50" : " cursor-pointer hover:bg-muted/40";
+  const attrs =
+    `type="button" role="radio" aria-checked="${row.highlighted}" data-value="${row.value}" ` +
+    `tabindex="${row.highlighted ? "0" : "-1"}"${row.disabled ? " disabled aria-disabled=\"true\"" : ""}`;
+  const className =
+    `asshukusan-bar-row flex w-full items-center gap-3 rounded border px-1.5 py-1.5 text-left text-sm ` +
+    `transition-colors focus-visible:outline-2 focus-visible:outline-ring${stateClass}${interactionClass}`;
+
   if (row.pending) {
     return (
-      `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
+      `<button ${attrs} class="${className}">` +
       `<span class="w-16 shrink-0 font-semibold text-foreground">${row.label}</span>` +
       `<span class="flex-1 text-xs text-muted-foreground">AVIF を変換中…</span>` +
-      `</div>`
+      `</button>`
     );
   }
-  if (!row.supported) {
+  if (row.disabled) {
     return (
-      `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
+      `<button ${attrs} class="${className}">` +
       `<span class="w-16 shrink-0 font-semibold text-foreground">${row.label}</span>` +
-      `<span class="flex-1 text-xs text-muted-foreground">このブラウザでは書き出し不可</span>` +
-      `</div>`
+      `<span class="flex-1 text-xs text-muted-foreground">${row.disabledReason ?? ""}</span>` +
+      `</button>`
     );
   }
   return (
-    `<div class="flex items-center gap-3 rounded px-1.5 py-1.5 text-sm${highlightClass}">` +
+    `<button ${attrs} class="${className}">` +
     `<span class="w-16 shrink-0 font-semibold text-foreground">${row.label}</span>` +
     `<span class="w-24 shrink-0 font-mono text-xs text-muted-foreground">${row.dims}</span>` +
     `<span class="w-16 shrink-0 font-mono text-xs text-muted-foreground">${row.bytes != null ? formatBytes(row.bytes) : "—"}</span>` +
     `<span class="w-14 shrink-0 text-right font-mono text-xs font-semibold text-primary">${row.delta ?? "±0%"}</span>` +
-    `<div class="h-2 min-w-16 flex-1 overflow-hidden rounded-full bg-muted">` +
-    `<div class="asshukusan-bar-fill h-full w-full rounded-full bg-primary" style="transform: scaleX(${row.scale.toFixed(4)});"></div>` +
-    `</div>` +
-    `</div>`
+    `<span class="block h-2 min-w-16 flex-1 overflow-hidden rounded-full bg-muted">` +
+    `<span class="asshukusan-bar-fill block h-full w-full rounded-full bg-primary" style="transform: scaleX(${row.scale.toFixed(4)});"></span>` +
+    `</span>` +
+    `</button>`
   );
 }
 
-/** フォーマット比較表（JPEG/WebP/PNG/AVIF）を棒グラフ行として組み立てる */
+/**
+ * フォーマット比較表（元のまま/JPEG/WebP/PNG/AVIF）を radio 行として組み立てる。
+ * 「元のまま」行はサイズ段の出力（passthroughBytes）をそのまま基準行として先頭に足す。
+ */
 export function buildFormatComparisonHtml(
   comparison: FormatComparisonRow[],
   dims: { width: number; height: number },
-  highlightFormat: OutputFormat,
+  selectedValue: FormatChoice,
+  passthroughBytes: number,
 ): string {
-  const maxBytes = Math.max(0, ...comparison.filter((row) => row.supported && row.bytes != null).map((row) => row.bytes as number));
+  const maxBytes = Math.max(
+    passthroughBytes,
+    ...comparison.filter((row) => row.supported && row.bytes != null).map((row) => row.bytes as number),
+  );
+  const dimsText = `${dims.width}×${dims.height}`;
+  const originalRow: BarRow = {
+    value: "original",
+    label: "元のまま",
+    dims: dimsText,
+    bytes: passthroughBytes,
+    delta: "±0%",
+    disabled: false,
+    disabledReason: null,
+    highlighted: selectedValue === "original",
+    scale: maxBytes > 0 ? passthroughBytes / maxBytes : 0,
+  };
   const rows: BarRow[] = comparison.map((row) => ({
+    value: row.format,
     label: row.label,
-    dims: `${dims.width}×${dims.height}`,
+    dims: dimsText,
     bytes: row.bytes,
     delta: row.delta,
-    supported: row.supported,
-    highlighted: row.format === highlightFormat,
+    disabled: !row.supported,
+    disabledReason: row.supported ? null : "このブラウザでは書き出し不可",
+    highlighted: selectedValue === row.format,
     scale: row.supported && row.bytes != null && maxBytes > 0 ? row.bytes / maxBytes : 0,
     pending: row.pending,
   }));
-  return rows.map(buildBarRowHtml).join("");
+  return [originalRow, ...rows].map(buildBarRowHtml).join("");
 }
 
-/** サイズラダー（原寸/2048/1600/1200/800）を棒グラフ行として組み立てる。差分は原寸基準 */
+/**
+ * サイズラダー（原寸/2048/1600/1200/800）を radio 行として組み立てる。差分は原寸基準。
+ * 画像の長辺以上（拡大になる）段は選べないため disabled で残す。
+ */
 export function buildSizeLadderHtml(rows: SizeLadderRow[], selectedCap: number | null): string {
-  const baseBytes = rows[0]?.bytes ?? 0;
+  const baseRow = rows[0];
+  const baseBytes = baseRow?.bytes ?? 0;
+  const longEdge = baseRow ? Math.max(baseRow.width, baseRow.height) : Infinity;
   const maxBytes = Math.max(0, ...rows.map((row) => row.bytes));
-  const barRows: BarRow[] = rows.map((row) => ({
-    label: row.label,
-    dims: `${row.width}×${row.height}`,
-    bytes: row.bytes,
-    delta: formatDelta(row.bytes, baseBytes),
-    supported: true,
-    highlighted: row.cap === selectedCap,
-    scale: maxBytes > 0 ? row.bytes / maxBytes : 0,
-  }));
+  const barRows: BarRow[] = rows.map((row) => {
+    const disabled = row.cap !== null && row.cap >= longEdge;
+    return {
+      value: row.cap === null ? "original" : String(row.cap),
+      label: row.label,
+      dims: `${row.width}×${row.height}`,
+      bytes: row.bytes,
+      delta: formatDelta(row.bytes, baseBytes),
+      disabled,
+      disabledReason: disabled ? "拡大になるため不可" : null,
+      highlighted: row.cap === selectedCap,
+      scale: maxBytes > 0 ? row.bytes / maxBytes : 0,
+    };
+  });
   return barRows.map(buildBarRowHtml).join("");
 }
 
@@ -655,24 +718,6 @@ export function buildOriginalDetailHtml(m: ImageMeta): string {
   return rowsHtml + warningHtml;
 }
 
-const LONG_EDGE_OPTIONS: readonly { value: string; label: string }[] = [
-  { value: "", label: "なし" },
-  { value: "2048", label: "2048px" },
-  { value: "1600", label: "1600px" },
-  { value: "1200", label: "1200px" },
-  { value: "800", label: "800px" },
-];
-
-/** 長辺の上限 select の <option> 一覧。画像の長辺以上の値は disabled にする */
-export function buildLongEdgeOptionsHtml(meta: ImageMeta, longEdgeCap: number | null): string {
-  const longEdge = Math.max(meta.width, meta.height);
-  return LONG_EDGE_OPTIONS.map((opt) => {
-    const disabled = opt.value !== "" && Number(opt.value) >= longEdge;
-    const selected = (longEdgeCap?.toString() ?? "") === opt.value;
-    return `<option value="${opt.value}"${disabled ? " disabled" : ""}${selected ? " selected" : ""}>${opt.label}</option>`;
-  }).join("");
-}
-
 /** サイズノードの寸法・縮小率・画素数・容量の情報テーブル */
 export function buildSizeInfoHtml(meta: ImageMeta, detail: SizeStageDetail, afterBytes: number): string {
   const rows =
@@ -699,28 +744,48 @@ export function defaultRemoveIds(scan: MetadataScanResult): Set<string> {
   return new Set(scan.segments.filter((s) => defaultRemoveForSegmentName(s.name)).map((s) => s.id));
 }
 
+/** セグメントの説明・中身プレビューはバイナリ由来のテキストのため、HTML として無害化してから差し込む */
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+}
+
 /**
  * メタデータノードの segment チェックボックス一覧。checkboxesDisabled は canvas 出力で
  * この形式（WebP/PNG/AVIF）へは引き継げないケースで、選択operationがもう意味を持たないことを
- * 視覚的にも伝えるために使う（disabled にするだけで、選択状態自体は保持する）
+ * 視覚的にも伝えるために使う（disabled にするだけで、選択状態自体は保持する）。
+ * 各行はチェックボックス+名前+バイト数の1行目、平易な説明の2行目、（読めれば）中身プレビューの3行目からなる。
+ * APP1 Exif / eXIf は別枠の「Exif 詳細」テーブルで中身を見せるため、ここではプレビューを出さない。
  */
-export function buildMetadataSegmentRowsHtml(scan: MetadataScanResult, removeIds: ReadonlySet<string>, checkboxesDisabled: boolean): string {
+export function buildMetadataSegmentRowsHtml(
+  scan: MetadataScanResult,
+  removeIds: ReadonlySet<string>,
+  checkboxesDisabled: boolean,
+  originalArrayBuffer: ArrayBuffer,
+): string {
   if (scan.segments.length === 0) {
     return `<p class="py-1 text-xs text-muted-foreground">検出されたメタデータセグメントはありません。</p>`;
   }
   return scan.segments
     .map((seg) => {
       const checked = removeIds.has(seg.id);
+      const description = segmentDescription(seg.name);
+      const content = segmentContentPreview(originalArrayBuffer, seg);
       const iccNote =
         seg.name === "APP2 ICC_PROFILE"
           ? `<p class="pl-6 pb-1 text-xs text-muted-foreground">sRGB でない ICC プロファイルを除去すると色味が変わることがあります。</p>`
           : "";
+      const descriptionHtml = description
+        ? `<p class="pl-6 text-xs text-muted-foreground">${escapeHtml(description)}</p>`
+        : "";
+      const contentHtml = content
+        ? `<p class="pl-6 pt-0.5 break-all font-mono text-xs text-muted-foreground">${escapeHtml(content)}</p>`
+        : "";
       return (
         `<div class="border-b border-border/60 py-1 last:border-b-0">` +
         `<label class="flex items-center justify-between gap-3 text-sm">` +
-        `<span class="flex items-center gap-1.5"><input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="text-muted-foreground">${seg.name}</span></span>` +
+        `<span class="flex items-center gap-1.5"><input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="font-semibold text-foreground">${escapeHtml(seg.name)}</span></span>` +
         `<span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>` +
-        `</label>${iccNote}` +
+        `</label>${descriptionHtml}${contentHtml}${iccNote}` +
         `</div>`
       );
     })

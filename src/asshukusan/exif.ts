@@ -9,6 +9,8 @@
  * 「セグメント境界だけ動かして中身は解釈しない」設計を崩さないため）。
  */
 
+import { pngChunkDataRange, type MetadataScanResult } from "./metadataStrip";
+
 const TIFF_TYPE_SIZE: Record<number, number> = {
   1: 1, // BYTE
   2: 1, // ASCII
@@ -253,6 +255,31 @@ export function extractExifPayloadFromJpegHeader(buf: ArrayBuffer): Uint8Array |
   } catch {
     return null;
   }
+}
+
+/** JPEG APP1 Exif payload / PNG eXIf チャンクの中身を揃えるための "Exif\0\0" ヘッダー（TIFF の前に付く） */
+export const EXIF_PAYLOAD_HEADER = new Uint8Array([0x45, 0x78, 0x69, 0x66, 0x00, 0x00]);
+
+/**
+ * JPEG は APP1 Exif の payload（"Exif\0\0" + TIFF）をそのまま、PNG は eXIf チャンクの中身
+ * （"Exif\0\0" ヘッダーを持たない生 TIFF）に疑似ヘッダーを被せて、どちらも `parseExifStructure` /
+ * `readExifTags` にそのまま渡せる形で取り出す。対象セグメントが無い・形式非対応なら null。
+ */
+export function extractExifPayload(originalArrayBuffer: ArrayBuffer, sniffedFormat: string, scan: MetadataScanResult): Uint8Array | null {
+  if (sniffedFormat === "JPEG") {
+    return extractExifPayloadFromJpegHeader(originalArrayBuffer.slice(0, 65536));
+  }
+  if (sniffedFormat === "PNG") {
+    const seg = scan.segments.find((s) => s.name === "eXIf");
+    if (!seg) return null;
+    const { dataStart, dataEnd } = pngChunkDataRange(seg);
+    const tiff = new Uint8Array(originalArrayBuffer).subarray(dataStart, dataEnd);
+    const payload = new Uint8Array(EXIF_PAYLOAD_HEADER.length + tiff.length);
+    payload.set(EXIF_PAYLOAD_HEADER, 0);
+    payload.set(tiff, EXIF_PAYLOAD_HEADER.length);
+    return payload;
+  }
+  return null;
 }
 
 /** JPEG の Exif（APP1）から Orientation タグ（0x0112）だけを読む軽量パス */
