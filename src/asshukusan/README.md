@@ -1,4 +1,4 @@
-# ケイリョウ（keiryo）
+# 圧縮 san（asshukusan）
 
 画像の圧縮率を工程ごとに比較します。
 
@@ -88,7 +88,7 @@ WebP は EXIF / XMP / ICCP チャンクを読み飛ばすだけでは済まな�
 ## ファイル構成
 
 ```
-keiryo/
+asshukusan/
 ├── index.html       エントリ（title / description は一覧・OGP 自動生成に使われる）
 ├── main.ts           UI・状態管理・DOM 組み立て・パイプライン実行のオーケストレーション
 ├── pipeline.ts        各ノードの計算ロジックと、詳細パネル用マークアップの組み立て

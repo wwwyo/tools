@@ -36,7 +36,7 @@ const DESCRIPTION = "画像の圧縮率を工程ごとに比較します。";
 appEl.innerHTML = `
   <main class="mx-auto flex max-w-5xl flex-col gap-8 px-5 py-10">
     <header class="flex flex-col gap-1.5">
-      <h1 class="text-2xl font-bold">ケイリョウ</h1>
+      <h1 class="text-2xl font-bold">圧縮 san</h1>
       <p class="text-sm text-muted-foreground">${DESCRIPTION}</p>
     </header>
 
@@ -62,9 +62,9 @@ appEl.innerHTML = `
     </section>
 
     <section id="result-section" class="hidden flex-col gap-4">
-      <div id="canvas" class="keiryo-canvas relative overflow-x-auto rounded border border-border">
-        <div id="canvas-content" class="keiryo-canvas-content relative">
-          <svg id="edges" class="keiryo-edges pointer-events-none absolute inset-0" aria-hidden="true"></svg>
+      <div id="canvas" class="asshukusan-canvas relative overflow-x-auto rounded border border-border">
+        <div id="canvas-content" class="asshukusan-canvas-content relative">
+          <svg id="edges" class="asshukusan-edges pointer-events-none absolute inset-0" aria-hidden="true"></svg>
         </div>
       </div>
 
@@ -379,7 +379,7 @@ function buildMetadataControls(scan: MetadataScanResult, exifTags: ExifTags | nu
 
   segListEl.addEventListener("change", (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement) || !target.classList.contains("keiryo-seg-checkbox")) return;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("asshukusan-seg-checkbox")) return;
     const id = target.dataset.segId;
     if (!id) return;
     if (target.checked) state.removeIds.add(id);
@@ -500,7 +500,7 @@ function setQuality(value: number): void {
 
 function createPort(side: "left" | "right"): HTMLDivElement {
   const portEl = document.createElement("div");
-  portEl.className = "keiryo-port absolute size-2.5 rounded-full border-2 border-primary bg-background";
+  portEl.className = "asshukusan-port absolute size-2.5 rounded-full border-2 border-primary bg-background";
   portEl.style.top = "50%";
   portEl.style.transform = "translateY(-50%)";
   portEl.style[side] = "-5px";
@@ -511,9 +511,9 @@ function createPort(side: "left" | "right"): HTMLDivElement {
 /** ノード共通の外枠（ヘッダー・ポート・選択操作）を組み立て、body 要素だけ呼び出し側に渡す */
 function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElement; headerEl: HTMLDivElement; bodyEl: HTMLDivElement; inputPortEl: HTMLDivElement | null; outputPortEl: HTMLDivElement | null } {
   const rootEl = document.createElement("div");
-  rootEl.id = `keiryo-node-${stageId}`;
+  rootEl.id = `asshukusan-node-${stageId}`;
   rootEl.className =
-    "keiryo-node absolute flex flex-col overflow-hidden rounded border border-border bg-card shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring";
+    "asshukusan-node absolute flex flex-col overflow-hidden rounded border border-border bg-card shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring";
   rootEl.style.width = `${NODE_WIDTH}px`;
   rootEl.style.setProperty("--row-index", String(index));
   rootEl.setAttribute("role", "button");
@@ -522,7 +522,7 @@ function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElem
   rootEl.tabIndex = -1;
 
   const headerEl = document.createElement("div");
-  headerEl.className = "keiryo-node-header bg-muted px-2 py-1 text-xs font-semibold text-foreground";
+  headerEl.className = "asshukusan-node-header bg-muted px-2 py-1 text-xs font-semibold text-foreground";
   headerEl.textContent = STAGE_LABELS[stageId];
 
   const bodyEl = document.createElement("div");
@@ -556,8 +556,8 @@ function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElem
  * パラメータバー側の要素が担う（引数の support は呼び出し側の互換のため受け取るだけで使わない）
  */
 function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boolean>): void {
-  canvasContentEl.querySelectorAll(".keiryo-node").forEach((el) => el.remove());
-  canvasContentEl.querySelectorAll(".keiryo-edge-label").forEach((el) => el.remove());
+  canvasContentEl.querySelectorAll(".asshukusan-node").forEach((el) => el.remove());
+  canvasContentEl.querySelectorAll(".asshukusan-edge-label").forEach((el) => el.remove());
   state.nodeEls = {};
   state.edgeEls = [];
 
@@ -629,12 +629,12 @@ function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boo
 
   for (let i = 0; i < STAGE_ORDER.length - 1; i++) {
     const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    pathEl.setAttribute("class", "keiryo-edge");
+    pathEl.setAttribute("class", "asshukusan-edge");
     edgesSvgEl.append(pathEl);
 
     const labelEl = document.createElement("span");
     labelEl.className =
-      "keiryo-edge-label rounded border border-border bg-card px-1 py-0.5 font-mono text-xs text-foreground";
+      "asshukusan-edge-label rounded border border-border bg-card px-1 py-0.5 font-mono text-xs text-foreground";
     const bytesTextEl = document.createElement("span");
     const deltaTextEl = document.createElement("span");
     deltaTextEl.className = "ml-1 text-primary";
@@ -649,7 +649,7 @@ function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boo
 
 function handleCanvasKeydown(event: KeyboardEvent): void {
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-  if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("keiryo-node")) return;
+  if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("asshukusan-node")) return;
   const currentIndex = STAGE_ORDER.indexOf(state.activeStage);
   const nextIndex =
     event.key === "ArrowRight"
@@ -982,7 +982,7 @@ function renderMetadataDetail(): void {
   // canvas 出力で引き継げない形式（WebP/PNG/AVIF）のときだけ、セグメントチェックボックスを
   // 視覚的に disabled にする（選択状態自体は state.removeIds に残したまま触らない）
   const checkboxesDisabled = d.cameFromCanvas && d.carryUnsupported;
-  controls.segListEl.querySelectorAll<HTMLInputElement>(".keiryo-seg-checkbox").forEach((el) => {
+  controls.segListEl.querySelectorAll<HTMLInputElement>(".asshukusan-seg-checkbox").forEach((el) => {
     el.disabled = checkboxesDisabled;
   });
   const notesHtml = metadataStatusNotes(d)

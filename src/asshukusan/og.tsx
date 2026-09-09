@@ -1,7 +1,7 @@
 // OGP カード用の画面ミニチュア。satori (OGP) と通常の React 描画 (デモページ) の両方から
 // 使われるため inline style のみ・display は flex のみで組む（本体の main.ts は変更しない）。
 //
-// 本体（src/keiryo/main.ts）は「元画像 → サイズ → フォーマット → メタデータ → 出力」の
+// 本体（src/asshukusan/main.ts）は「元画像 → サイズ → フォーマット → メタデータ → 出力」の
 // 5ノードをポート付きのカードとして横に並べ、曲線のエッジで繋ぐノードフローエディタ風の
 // キャンバスを見せる。ミニチュアはヘッダー帯・ポート・エッジの太さという構造だけを
 // 抜き出して再現する（値の意味までは持たせない）。
@@ -87,7 +87,7 @@ function PipelineNodeBox({ node, isFirst, isLast }: { node: PipelineNode; isFirs
   );
 }
 
-export default function KeiryoOgPreview() {
+export default function AsshukusanOgPreview() {
   return (
     <div
       style={{

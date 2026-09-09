@@ -217,7 +217,7 @@ export function generateSampleFile(): Promise<File> {
       }
       try {
         const exifApp1 = buildExifApp1({
-          make: "Keiryo",
+          make: "Asshukusan",
           model: "Sample",
           dateTimeOriginal: "2026:09:09 12:00:00",
           orientation: 1,

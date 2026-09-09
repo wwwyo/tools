@@ -574,7 +574,7 @@ function buildBarRowHtml(row: BarRow): string {
     `<span class="w-16 shrink-0 font-mono text-xs text-muted-foreground">${row.bytes != null ? formatBytes(row.bytes) : "—"}</span>` +
     `<span class="w-14 shrink-0 text-right font-mono text-xs font-semibold text-primary">${row.delta ?? "±0%"}</span>` +
     `<div class="h-2 min-w-16 flex-1 overflow-hidden rounded-full bg-muted">` +
-    `<div class="keiryo-bar-fill h-full w-full rounded-full bg-primary" style="transform: scaleX(${row.scale.toFixed(4)});"></div>` +
+    `<div class="asshukusan-bar-fill h-full w-full rounded-full bg-primary" style="transform: scaleX(${row.scale.toFixed(4)});"></div>` +
     `</div>` +
     `</div>`
   );
@@ -718,7 +718,7 @@ export function buildMetadataSegmentRowsHtml(scan: MetadataScanResult, removeIds
       return (
         `<div class="border-b border-border/60 py-1 last:border-b-0">` +
         `<label class="flex items-center justify-between gap-3 text-sm">` +
-        `<span class="flex items-center gap-1.5"><input type="checkbox" class="keiryo-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="text-muted-foreground">${seg.name}</span></span>` +
+        `<span class="flex items-center gap-1.5"><input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="text-muted-foreground">${seg.name}</span></span>` +
         `<span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>` +
         `</label>${iccNote}` +
         `</div>`
