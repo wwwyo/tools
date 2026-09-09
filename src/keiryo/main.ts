@@ -146,6 +146,7 @@ interface MetadataNodeEls extends BaseNodeEls {
 interface OutputNodeEls extends BaseNodeEls {
   bytesEl: HTMLSpanElement;
   deltaEl: HTMLSpanElement;
+  downloadButtonEl: HTMLAnchorElement;
 }
 
 interface NodeElsMap {
@@ -332,28 +333,10 @@ function buildMetadataControls(): MetadataControls {
   return { rootEl, checkboxEl: rootEl.querySelector("#strip-metadata") as HTMLInputElement };
 }
 
-interface OutputControls {
-  rootEl: HTMLDivElement;
-  downloadButtonEl: HTMLAnchorElement;
-}
-
-function buildOutputControls(): OutputControls {
-  const rootEl = createControlsRow();
-  rootEl.innerHTML = `
-    <a
-      id="download-button"
-      href="#"
-      aria-disabled="true"
-      class="pointer-events-none inline-flex shrink-0 items-center gap-1 rounded border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground opacity-50 transition-colors hover:opacity-90"
-    >ダウンロード</a>
-  `;
-  return { rootEl, downloadButtonEl: rootEl.querySelector("#download-button") as HTMLAnchorElement };
-}
 
 const sizeControls = buildSizeControls();
 const formatControls = buildFormatControls();
 const metadataControls = buildMetadataControls();
-const outputControls = buildOutputControls();
 
 /** サイズ・フォーマット両カードの品質 range を同期する（片方の入力で両方 + state を更新） */
 function setQuality(value: number, source?: HTMLInputElement): void {
@@ -471,8 +454,16 @@ function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boo
         bytesEl.className = "font-mono text-base font-semibold text-foreground";
         const deltaEl = document.createElement("span");
         deltaEl.className = "font-mono font-semibold text-primary";
-        shell.bodyEl.append(bytesEl, deltaEl);
-        state.nodeEls.output = { ...shell, bytesEl, deltaEl };
+        const downloadButtonEl = document.createElement("a");
+        downloadButtonEl.href = "#";
+        downloadButtonEl.setAttribute("aria-disabled", "true");
+        downloadButtonEl.className =
+          "pointer-events-none mt-1 inline-flex self-start items-center rounded border border-primary bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground opacity-50 transition-colors hover:opacity-90";
+        downloadButtonEl.textContent = "ダウンロード";
+        // ノード本体の click は選択に使うため、ボタン押下を選択切替に流さない
+        downloadButtonEl.addEventListener("click", (event) => event.stopPropagation());
+        shell.bodyEl.append(bytesEl, deltaEl, downloadButtonEl);
+        state.nodeEls.output = { ...shell, bytesEl, deltaEl, downloadButtonEl };
         break;
       }
     }
@@ -715,7 +706,8 @@ function updateOutputNode(): void {
 /** 出力カードのダウンロードボタンを最新のパイプライン結果に合わせる（計算中は disabled・href・ファイル名） */
 function updateDownloadButton(): void {
   const pipeline = state.pipeline;
-  const el = outputControls.downloadButtonEl;
+  const el = state.nodeEls.output?.downloadButtonEl;
+  if (!el) return;
   if (!pipeline || !state.outputObjectUrl || state.computing) {
     el.classList.add("pointer-events-none", "opacity-50");
     el.setAttribute("aria-disabled", "true");
@@ -862,7 +854,7 @@ function renderOutputDetail(): void {
   const meta = state.meta;
   const pipeline = state.pipeline;
   if (!meta || !pipeline || !state.objectUrl || !state.outputObjectUrl) {
-    renderDetailCard(outputControls.rootEl, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
+    renderDetailCard(null, buildDetailContentEl("", `<p class="text-xs text-muted-foreground">計算中…</p>`));
     return;
   }
   const d = pipeline.output.detail;
@@ -879,7 +871,7 @@ function renderOutputDetail(): void {
       </div>
     `,
   );
-  renderDetailCard(outputControls.rootEl, contentEl);
+  renderDetailCard(null, contentEl);
 }
 
 function renderDetailPanel(): void {
