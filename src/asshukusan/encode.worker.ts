@@ -3,7 +3,7 @@
  * OffscreenCanvas への描画と、AVIF の wasm エンコード（@jsquash/avif）はどちらも
  * 大きな画像で数百ms〜数秒かかりうるため、メインスレッドに置くと UI が固まる。
  * この worker は 1 リクエスト = 1 メッセージの単発 RPC として振る舞い、状態を持たない
- * （AVIF wasm モジュールのキャッシュだけは worker ごとに独立して持つ）。
+ * （AVIF wasm モジュールのキャッシュは encodeShared.ts がモジュール単位で持つ）。
  *
  * この ts ファイルには `/// <reference lib="webworker" />` を足していない。tsconfig は
  * リポジトリ全体で 1 本（"dom" lib）を共有しており、"webworker" lib を混ぜると
@@ -13,7 +13,7 @@
  * "webworker" lib に切り替える必要はない。
  */
 
-import { computeTargetDims, FORMAT_MIME, type OutputFormat } from "./encodeShared";
+import { computeTargetDims, encodeAvif, FORMAT_MIME, type OutputFormat } from "./encodeShared";
 
 interface EncodeRequest {
   id: number;
@@ -27,23 +27,6 @@ type EncodeResponse =
   | { id: number; blob: Blob; width: number; height: number }
   | { id: number; error: string };
 
-// @jsquash/avif は wasm を読み込むため、AVIF を実際に使うリクエストが来るまで import を遅らせる。
-// worker はメインスレッドと別コンテキストなので、このキャッシュも worker 側に独立して持つ
-// （encode.ts のメインスレッド版キャッシュとは別物）
-let avifModulePromise: Promise<typeof import("@jsquash/avif")> | null = null;
-
-function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
-  if (!avifModulePromise) avifModulePromise = import("@jsquash/avif");
-  return avifModulePromise;
-}
-
-/** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
-async function encodeAvif(imageData: ImageData, quality: number): Promise<Blob> {
-  const { encode } = await loadAvifEncoder();
-  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
-  return new Blob([buf], { type: FORMAT_MIME.avif });
-}
-
 self.onmessage = async (event: MessageEvent<EncodeRequest>) => {
   const { id, bitmap, format, quality, longEdgeCap } = event.data;
   try {
@@ -51,8 +34,13 @@ self.onmessage = async (event: MessageEvent<EncodeRequest>) => {
     const canvas = new OffscreenCanvas(dims.width, dims.height);
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("OffscreenCanvas 2d context を取得できませんでした");
-    ctx.drawImage(bitmap, 0, 0, dims.width, dims.height);
-    bitmap.close(); // 転送されたビットマップは描画後すぐ手放してよい
+    try {
+      ctx.drawImage(bitmap, 0, 0, dims.width, dims.height);
+    } finally {
+      // 転送されたビットマップは描画後（失敗時も）すぐ手放す。GC 任せにすると
+      // 大きな画像を連続で変換したとき worker 側にデコード済み画素が溜まる
+      bitmap.close();
+    }
 
     let blob: Blob;
     if (format === "avif") {

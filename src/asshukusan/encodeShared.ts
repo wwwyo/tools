@@ -48,3 +48,20 @@ export function computeTargetDims(
   const scale = longEdgeCap / longEdge;
   return { width: Math.round(naturalWidth * scale), height: Math.round(naturalHeight * scale) };
 }
+
+// @jsquash/avif は wasm を読み込むため、AVIF を実際に使うまで import を遅らせる。
+// module Promise はこのモジュールのインスタンスごと（メインスレッド / worker で別）に 1 つ持ち、
+// 複数回 AVIF を選んでも読み込みは初回の 1 回だけにする
+let avifModulePromise: Promise<typeof import("@jsquash/avif")> | null = null;
+
+function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
+  if (!avifModulePromise) avifModulePromise = import("@jsquash/avif");
+  return avifModulePromise;
+}
+
+/** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
+export async function encodeAvif(imageData: ImageData, quality: number): Promise<Blob> {
+  const { encode } = await loadAvifEncoder();
+  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
+  return new Blob([buf], { type: FORMAT_MIME.avif });
+}

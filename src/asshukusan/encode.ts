@@ -11,6 +11,7 @@ import { buildExifApp1 } from "./exif";
 import { insertJpegSegments } from "./metadataStrip";
 import {
   computeTargetDims,
+  encodeAvif,
   extensionFor,
   FORMAT_MIME,
   type EncodeResult,
@@ -53,27 +54,6 @@ export async function detectFormatSupport(): Promise<Record<ProbedFormat, boolea
   return { jpeg, webp, avif };
 }
 
-// @jsquash/avif は wasm を読み込むため、AVIF を実際に使うツールでだけ import したい。
-// モジュール Promise をキャッシュし、複数回 AVIF を選んでも読み込みは初回の1回だけにする。
-// これはメインスレッド版フォールバック（encodeImageMainThread）専用のキャッシュで、
-// worker 側は encode.worker.ts に別のキャッシュを独立して持つ
-let avifModulePromise: Promise<typeof import("@jsquash/avif")> | null = null;
-
-function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
-  if (!avifModulePromise) {
-    avifModulePromise = import("@jsquash/avif");
-  }
-  return avifModulePromise;
-}
-
-/** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
-async function encodeAvifMainThread(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, quality: number): Promise<Blob> {
-  const { encode } = await loadAvifEncoder();
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
-  return new Blob([buf], { type: FORMAT_MIME.avif });
-}
-
 /**
  * OffscreenCanvas/Worker が使えない環境向けのフォールバック経路。worker 版と同じ手順
  * （drawImage → toBlob、AVIF だけ getImageData → wasm encode）をメインスレッドで直接行う。
@@ -91,7 +71,7 @@ async function encodeImageMainThread(
   ctx.drawImage(img, 0, 0, dims.width, dims.height);
 
   if (opts.format === "avif") {
-    const blob = await encodeAvifMainThread(canvas, ctx, opts.quality);
+    const blob = await encodeAvif(ctx.getImageData(0, 0, dims.width, dims.height), opts.quality);
     return { blob, width: dims.width, height: dims.height };
   }
 
@@ -144,6 +124,9 @@ function getEncodeWorker(): Worker {
       task.reject(error);
       pendingEncodes.delete(id);
     }
+    // 壊れた worker を使い回すと以後の全リクエストが同じ失敗を繰り返すので捨てて、次回の呼び出しで作り直す
+    w.terminate();
+    if (encodeWorker === w) encodeWorker = null;
   };
   encodeWorker = w;
   return w;
@@ -154,8 +137,10 @@ async function encodeImageViaWorker(
   opts: { format: OutputFormat; quality: number; longEdgeCap: number | null },
 ): Promise<EncodeResult> {
   // createImageBitmap 自体はメインスレッドでしか呼べないが、デコード済みのビットマップを
-  // worker へ転送するだけなので画素コピーは発生しない（Transferable として move される）
-  const bitmap = await createImageBitmap(img);
+  // worker へ転送するだけなので画素コピーは発生しない（Transferable として move される）。
+  // imageOrientation の既定値はブラウザで異なり（Safari は Exif の向きを適用しない）、
+  // <img> を drawImage するメインスレッド経路と結果がずれるので明示する
+  const bitmap = await createImageBitmap(img, { imageOrientation: "from-image" });
   const w = getEncodeWorker();
   const id = nextRequestId++;
   return new Promise<EncodeResult>((resolve, reject) => {
