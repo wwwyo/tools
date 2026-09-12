@@ -107,7 +107,7 @@ WebP は EXIF / XMP / ICCP チャンクを読み飛ばすだけでは済まな�
 
 ### AVIF だけ wasm エンコーダを積んでいる理由
 
-ブラウザは AVIF を「表示」はできても、`canvas.toBlob("image/avif")` で「書き出す」実装はどこにもない。AVIF を実データとして比較材料に出すには自前のエンコーダが要るため、`@jsquash/avif`（libavif を wasm 化したもの。Apache-2.0）をバンドルし、canvas から取り出した `ImageData` を直接エンコードしている。対応可否は他の形式のような `toBlob` probe ではなく `typeof WebAssembly === "object"` の一点で判定する。この wasm は `import("@jsquash/avif")` で AVIF を実際に使う瞬間まで読み込みを遅らせ、一度読み込んだモジュールは Promise ごとキャッシュして使い回す（AVIF を選ばないユーザーに wasm を配らないため）。1600px 級の画像で数秒かかるほど遅いため、比較表・COMPARISON_FORMATS の両方で常に最後に置き、フォーマット比較表では他の行を待たせず pending 行のまま先に確定させて後から差し替える（フォーマットノードにも「AVIF を変換中…」を出す）。選択中の出力形式が AVIF のときだけ、この同じ encode 結果を選択出力にも使い回し、二重にエンコードしない。
+ブラウザは AVIF を「表示」はできても、`canvas.toBlob("image/avif")` で「書き出す」実装はどこにもない。AVIF を実データとして比較材料に出すには自前のエンコーダが要るため、`@jsquash/avif`（libavif を wasm 化したもの。Apache-2.0）をバンドルし、canvas から取り出した `ImageData` を直接エンコードしている。対応可否は他の形式のような `toBlob` probe ではなく `typeof WebAssembly === "object"` の一点で判定する。wasm 本体（約 3.4 MB）は `@jsquash/avif` が初回の `encode()` で fetch するため、AVIF を選ばないユーザーには配られない。モジュール自体は静的 import にしている。動的 import で先送りできるのはグルーコード数十 KB だけで、そのために worker のビルド形式（`worker.format`）を変える必要が生じるほうが割に合わないため。初期化の失敗は自前の Promise で握り、失敗したら捨てて次回 `init()` からやり直す（ライブラリ側は失敗した初期化 Promise を持ち続けるため）。1600px 級の画像で数秒かかるほど遅いため、比較表・COMPARISON_FORMATS の両方で常に最後に置き、フォーマット比較表では他の行を待たせず pending 行のまま先に確定させて後から差し替える（フォーマットノードにも「AVIF を変換中…」を出す）。選択中の出力形式が AVIF のときだけ、この同じ encode 結果を選択出力にも使い回し、二重にエンコードしない。
 
 ### pixel 処理（リサイズ + 再エンコード）を worker に逃がす理由
 

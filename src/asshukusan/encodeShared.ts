@@ -5,6 +5,11 @@
  * worker のバンドルにメインスレッド専用コードが紛れ込むのを防ぐ。
  */
 
+// wasm 本体（3.4 MB）は @jsquash/avif が初回 encode 時に fetch するので、モジュール自体は
+// 静的 import でよい。動的 import にしても先送りできるのはグルーコード数十 KB だけで、
+// そのために worker のビルド形式を変える必要が生じるほうが割に合わない
+import encodeAvifWasm, { init as initAvif } from "@jsquash/avif/encode";
+
 /** このツールが梯子の行として並べる出力形式。品質パラメータの有無に関わらず、拡張子ごとに1行 */
 export type OutputFormat = "jpeg" | "webp" | "avif" | "png";
 
@@ -49,16 +54,6 @@ export function computeTargetDims(
   return { width: Math.round(naturalWidth * scale), height: Math.round(naturalHeight * scale) };
 }
 
-// @jsquash/avif は wasm を読み込むため、AVIF を実際に使うまで import を遅らせる。
-// module Promise はこのモジュールのインスタンスごと（メインスレッド / worker で別）に 1 つ持ち、
-// 複数回 AVIF を選んでも読み込みは初回の 1 回だけにする
-let avifModulePromise: Promise<typeof import("@jsquash/avif")> | null = null;
-
-function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
-  if (!avifModulePromise) avifModulePromise = import("@jsquash/avif");
-  return avifModulePromise;
-}
-
 /**
  * wasm の初期化・エンコードに失敗した（CSP で wasm 実行がブロックされている等）ことを表す。
  * 呼び出し側（pipeline.ts / main.ts）はこれを「このセッションでは AVIF が使えない」判定に使う。
@@ -70,32 +65,40 @@ export class UnsupportedFormatError extends Error {
   }
 }
 
-/**
- * 失敗した wasm モジュール Promise をキャッシュから外す。読み込み済みとして使い回すと、
- * 一度失敗した後の全リクエストが同じ失敗を再現するだけになるため、次回呼び出しで
- * import からやり直せるようにする（CSP 設定の反映後の再試行等）。
- */
+// wasm の初期化は @jsquash/avif が `encode()` 初回に内部で行う（fetch + instantiate）。
+// ここでは初期化の成否だけを 1 つの Promise で握り、失敗したら捨てて次回やり直せるようにする。
+// @jsquash/avif 自身は失敗した初期化 Promise を持ち続けるため、明示的に `init()` を呼び直して
+// 上書きしないと同じ失敗を再現し続ける
+let avifInitPromise: Promise<void> | null = null;
+
+function ensureAvifInitialized(): Promise<void> {
+  if (!avifInitPromise) {
+    avifInitPromise = initAvif().then(() => undefined);
+  }
+  return avifInitPromise;
+}
+
+/** 失敗した初期化をキャッシュから外し、次回の呼び出しで wasm の読み込みからやり直せるようにする */
 export function resetAvifEncoder(): void {
-  avifModulePromise = null;
+  avifInitPromise = null;
 }
 
 /**
  * quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす。
  *
- * `UnsupportedFormatError` にするのは wasm の import・初期化に失敗した場合だけに限定する
+ * `UnsupportedFormatError` にするのは wasm の初期化に失敗した場合だけに限定する
  * （呼び出し側はこれを「このセッションでは AVIF が丸ごと使えない」判定に使い、モジュールを
  * 作り直させ、AVIF を比較表から外す）。モジュール自体は生きていて `encode()` 呼び出しだけが
  * 失敗した場合（大きすぎる画像での OOM 等）は普通の Error のまま投げる。ここを混同すると、
  * たまたま重い1枚のエンコードが失敗しただけで以後ずっと AVIF が選べなくなってしまう。
  */
 export async function encodeAvif(imageData: ImageData, quality: number): Promise<Blob> {
-  let encode: (typeof import("@jsquash/avif"))["encode"];
   try {
-    ({ encode } = await loadAvifEncoder());
+    await ensureAvifInitialized();
   } catch (error) {
     resetAvifEncoder();
     throw new UnsupportedFormatError(error instanceof Error ? error.message : "AVIF エンコーダの読み込みに失敗しました");
   }
-  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
+  const buf = await encodeAvifWasm(imageData, { quality: Math.round(quality * 100), speed: 8 });
   return new Blob([buf], { type: FORMAT_MIME.avif });
 }
