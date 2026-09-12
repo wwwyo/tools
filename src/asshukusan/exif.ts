@@ -407,7 +407,12 @@ function zeroOutGps(bytes: Uint8Array, view: DataView, little: boolean, tiffStar
   if (structure.exifIfdOffset != null && structure.exifIfd) {
     structuralRanges.push(ifdTableRange(structure.exifIfdOffset, structure.exifIfd.length));
   }
-  structuralRanges.push(ifdTableRange(structure.gpsIfdOffset, structure.gpsIfd.length));
+  // GPS IFD のテーブル自体が他の構造（ヘッダー・IFD0・ExifIFD）と重なっている
+  // （= ポインタが同じ IFD を指している等）なら、エントリの value 欄をゼロにした時点で
+  // 他の IFD を壊すので、ここでも編集全体を中止する
+  const gpsTableRange = ifdTableRange(structure.gpsIfdOffset, structure.gpsIfd.length);
+  if (structuralRanges.some((range) => rangesOverlap(gpsTableRange, range))) return;
+  structuralRanges.push(gpsTableRange);
 
   for (const entry of structure.gpsIfd) {
     const typeSize = TIFF_TYPE_SIZE[entry.type];

@@ -185,14 +185,16 @@ async function encodeImageViaWorker(
   }
 
   const id = nextRequestId++;
+  const result = new Promise<EncodeResult>((resolve, reject) => {
+    pendingEncodes.set(id, { resolve, reject });
+  });
   try {
-    return await new Promise<EncodeResult>((resolve, reject) => {
-      pendingEncodes.set(id, { resolve, reject });
-      w.postMessage({ id, bitmap, format: opts.format, quality: opts.quality, longEdgeCap: opts.longEdgeCap }, [bitmap]);
-    });
+    w.postMessage({ id, bitmap, format: opts.format, quality: opts.quality, longEdgeCap: opts.longEdgeCap }, [bitmap]);
   } catch (error) {
     // postMessage が同期的に投げた場合（構造化複製の失敗等）はビットマップがまだ worker へ
-    // 転送されていないため、ここで明示的に閉じないと保持されたままになる
+    // 転送されていないため、ここで明示的に閉じないと保持されたままになる。
+    // フォールバックするのはこの同期失敗だけ。worker からの非同期な失敗（エンコード自体の
+    // 失敗・OOM 等）は同じ重い処理をメインスレッドで繰り返しても意味がないので、そのまま伝播させる
     pendingEncodes.delete(id);
     console.error(error);
     try {
@@ -202,6 +204,7 @@ async function encodeImageViaWorker(
     }
     return encodeImageMainThread(img, opts);
   }
+  return result;
 }
 
 /**
