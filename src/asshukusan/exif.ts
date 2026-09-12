@@ -54,6 +54,46 @@ const TAG_GPS_LAT = 0x0002;
 const TAG_GPS_LON_REF = 0x0003;
 const TAG_GPS_LON = 0x0004;
 
+/** IFD0 / Exif IFD のタグ名一覧（`listExifEntries` の表示用）。ここに無いタグは名前を持たず、UI 側が 16進表記で出す */
+const EXIF_TAG_NAMES: Record<number, string> = {
+  0x010e: "ImageDescription",
+  0x010f: "Make",
+  0x0110: "Model",
+  0x0112: "Orientation",
+  0x011a: "XResolution",
+  0x011b: "YResolution",
+  0x0128: "ResolutionUnit",
+  0x0131: "Software",
+  0x0132: "DateTime",
+  0x013b: "Artist",
+  0x0213: "YCbCrPositioning",
+  0x8298: "Copyright",
+  0x8769: "ExifIFDPointer",
+  0x8825: "GPSInfoPointer",
+  0x829a: "ExposureTime",
+  0x829d: "FNumber",
+  0x8827: "ISOSpeedRatings",
+  0x9003: "DateTimeOriginal",
+  0x9004: "DateTimeDigitized",
+  0x9201: "ShutterSpeedValue",
+  0x9202: "ApertureValue",
+  0x9204: "ExposureBiasValue",
+  0x9207: "MeteringMode",
+  0x9209: "Flash",
+  0x920a: "FocalLength",
+  0x927c: "MakerNote",
+  0x9286: "UserComment",
+  0xa002: "PixelXDimension",
+  0xa003: "PixelYDimension",
+  0xa405: "FocalLengthIn35mmFilm",
+  0xa430: "CameraOwnerName",
+  0xa431: "BodySerialNumber",
+  0xa432: "LensSpecification",
+  0xa433: "LensMake",
+  0xa434: "LensModel",
+  0xa435: "LensSerialNumber",
+};
+
 /** 1個の IFD エントリ（12 byte）の位置と生の値/オフセットフィールド */
 export interface ExifIfdEntry {
   tag: number;
@@ -283,6 +323,174 @@ function viewOf(payload: Uint8Array, structure: ExifStructure): { view: DataView
   };
 }
 
+// --- タグ単位の一覧（IFD0 / Exif IFD） ---------------------------------------
+
+/** IFD0 / Exif IFD の1エントリを、UI のタグテーブルにそのまま出せる形にしたもの */
+export interface ExifEntryInfo {
+  ifd: "ifd0" | "exif";
+  tag: number;
+  /** EXIF_TAG_NAMES に無いタグは null（呼び出し側は `0x829A` のような16進表記で出す） */
+  name: string | null;
+  type: number;
+  count: number;
+  /** 値領域の総バイト数（4 byte 以下ならエントリ内、それより大きければ外部オフセット先） */
+  valueBytes: number;
+  /** 表示用文字列。範囲外・構造への重なりがあれば「（壊れた値）」になる */
+  display: string;
+  entryOffset: number;
+}
+
+const EXIF_CORRUPTED_LABEL = "（壊れた値）";
+
+/** タグ id を `0x829A` 形式の16進表記にする（name が無いタグの表示用） */
+export function exifTagHexLabel(tag: number): string {
+  return `0x${tag.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+/** `removeTags` のキー（`${ifd}:${tag}`）を組み立てる。exif.ts 側がキー形式を持ち、
+ * main.ts はこの関数を通してだけキーを作る（形式を2箇所に書かない） */
+export function exifTagKey(ifd: "ifd0" | "exif", tag: number): string {
+  return `${ifd}:${tag}`;
+}
+
+/** `removeTags` のキーを分解する。壊れたキー（形式不一致・NaN）は null */
+function parseExifTagKey(key: string): { ifd: "ifd0" | "exif"; tag: number } | null {
+  const [ifdPart, tagPart] = key.split(":");
+  if (ifdPart !== "ifd0" && ifdPart !== "exif") return null;
+  const tag = Number(tagPart);
+  return Number.isFinite(tag) ? { ifd: ifdPart, tag } : null;
+}
+
+/** ポインタタグ（ExifIFD/GPSInfo）はセグメント構造そのものなので、一覧に出しても消せない */
+function isPointerTag(tag: number): boolean {
+  return tag === TAG_EXIF_IFD_POINTER || tag === TAG_GPS_INFO_POINTER;
+}
+
+/** listExifEntries が「壊れている」と判定したエントリかどうかを display 文字列で見分ける */
+export function isExifEntryRemovable(entry: ExifEntryInfo): boolean {
+  return !isPointerTag(entry.tag) && entry.display !== EXIF_CORRUPTED_LABEL;
+}
+
+/** IFD テーブル領域（`ifdTableRange` と同じ半開区間）が、他の解析済み構造と重ならないかを見る */
+function overlapsParsedStructure(structure: ExifStructure, range: [number, number]): boolean {
+  const ranges: [number, number][] = [
+    [structure.tiffStart, structure.tiffStart + 8],
+    ifdTableRange(structure.ifd0Offset, structure.ifd0.length),
+  ];
+  if (structure.exifIfdOffset != null && structure.exifIfd) {
+    ranges.push(ifdTableRange(structure.exifIfdOffset, structure.exifIfd.length));
+  }
+  if (structure.gpsIfdOffset != null && structure.gpsIfd) {
+    ranges.push(ifdTableRange(structure.gpsIfdOffset, structure.gpsIfd.length));
+  }
+  return ranges.some((r) => rangesOverlap(range, r));
+}
+
+/** エントリの値領域（外部/内部どちらか）の絶対オフセットと、範囲外・構造重なりの有無を求める */
+function entryValueLocation(
+  payload: Uint8Array,
+  view: DataView,
+  little: boolean,
+  tiffStart: number,
+  structure: ExifStructure,
+  entry: ExifIfdEntry,
+): { abs: number; valueBytes: number; corrupted: boolean } {
+  const typeSize = TIFF_TYPE_SIZE[entry.type] ?? 1; // 未知の type は BYTE 相当（1 byte）として扱う
+  const valueBytes = typeSize * entry.count;
+  const external = valueBytes > 4;
+  const abs = external ? tiffStart + view.getUint32(entry.entryOffset + 8, little) : entry.entryOffset + 8;
+  const inBounds = isInBounds(payload.length, abs, valueBytes);
+  const corrupted = !inBounds || (external && inBounds && overlapsParsedStructure(structure, [abs, abs + valueBytes]));
+  return { abs, valueBytes, corrupted };
+}
+
+function reduceFraction(num: number, den: number): [number, number] {
+  if (den === 0) return [num, den];
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const g = gcd(Math.abs(num), Math.abs(den)) || 1;
+  return [num / g, den / g];
+}
+
+/** エントリの型に応じて値を読み、表示用文字列にする。呼び出し側は事前に corrupted でないことを確認する */
+function formatEntryValue(payload: Uint8Array, view: DataView, little: boolean, entry: ExifIfdEntry, abs: number, valueBytes: number): string {
+  switch (entry.type) {
+    case 2: {
+      // ASCII: 先頭から NUL までを文字列化し、80文字を超える分は省略する
+      let s = "";
+      for (let i = 0; i < entry.count; i++) {
+        const b = payload[abs + i] ?? 0;
+        if (b === 0) break;
+        s += String.fromCharCode(b);
+      }
+      return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+    }
+    case 3:
+    case 4: {
+      // SHORT/LONG: 最大4個まで表示
+      const shown = Math.min(entry.count, 4);
+      const vals: number[] = [];
+      for (let i = 0; i < shown; i++) {
+        vals.push(entry.type === 3 ? view.getUint16(abs + i * 2, little) : view.getUint32(abs + i * 4, little));
+      }
+      return vals.join(", ") + (entry.count > shown ? ", …" : "");
+    }
+    case 5:
+    case 10: {
+      // RATIONAL/SRATIONAL: 最大2個まで、約分して n/d で表示
+      const shown = Math.min(entry.count, 2);
+      const parts: string[] = [];
+      for (let i = 0; i < shown; i++) {
+        const off = abs + i * 8;
+        const num = entry.type === 5 ? view.getUint32(off, little) : view.getInt32(off, little);
+        const den = entry.type === 5 ? view.getUint32(off + 4, little) : view.getInt32(off + 4, little);
+        const [rn, rd] = reduceFraction(num, den);
+        parts.push(`${rn}/${rd}`);
+      }
+      return parts.join(", ") + (entry.count > shown ? ", …" : "");
+    }
+    default:
+      // UNDEFINED やその他の型は中身を解釈せずバイト数だけ示す（MakerNote 等の不透明データ向け）
+      return `<${valueBytes} バイト>`;
+  }
+}
+
+function listIfdEntries(
+  payload: Uint8Array,
+  view: DataView,
+  little: boolean,
+  tiffStart: number,
+  structure: ExifStructure,
+  ifdName: "ifd0" | "exif",
+  entries: ExifIfdEntry[],
+): ExifEntryInfo[] {
+  return entries.map((entry) => {
+    const { abs, valueBytes, corrupted } = entryValueLocation(payload, view, little, tiffStart, structure, entry);
+    const display = corrupted ? EXIF_CORRUPTED_LABEL : formatEntryValue(payload, view, little, entry, abs, valueBytes);
+    return {
+      ifd: ifdName,
+      tag: entry.tag,
+      name: EXIF_TAG_NAMES[entry.tag] ?? null,
+      type: entry.type,
+      count: entry.count,
+      valueBytes,
+      display,
+      entryOffset: entry.entryOffset,
+    };
+  });
+}
+
+/** IFD0 と Exif IFD（IFD1/サムネイルは含まない）の全エントリを UI 表示用に一覧化する */
+export function listExifEntries(payload: Uint8Array): ExifEntryInfo[] {
+  const structure = parseExifStructure(payload);
+  if (!structure) return [];
+  const { view, little, tiffStart } = viewOf(payload, structure);
+  const result = listIfdEntries(payload, view, little, tiffStart, structure, "ifd0", structure.ifd0);
+  if (structure.exifIfd) {
+    result.push(...listIfdEntries(payload, view, little, tiffStart, structure, "exif", structure.exifIfd));
+  }
+  return result;
+}
+
 /**
  * JPEG バッファから最初の APP1 Exif セグメントの payload を取り出す。
  * マーカー走査は metadataStrip.ts の `readNextJpegMarker` と同じ規則（0xFF fill byte を
@@ -366,6 +574,9 @@ export interface ExifEdits {
   dateTime?: string;
   dateTimeOriginal?: string;
   removeGps: boolean;
+  /** 個別に消すタグ（`exifTagKey` で作ったキーの集合）。ポインタタグは isExifEntryRemovable で弾かれる前提だが、
+   * ここでも念のため無視する（呼び出し側の選択漏れだけに頼らない） */
+  removeTags: ReadonlySet<string>;
 }
 
 const DATETIME_PATTERN = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/;
@@ -451,6 +662,51 @@ function zeroOutGps(bytes: Uint8Array, view: DataView, little: boolean, tiffStar
 }
 
 /**
+ * IFD0 / Exif IFD の1タグを、GPS 除去（`zeroOutGps`）と同じ考え方で無効化する:
+ * 値領域（4 byte を超える分は外部オフセット先）をゼロ埋めし、タグ id を 0xFFFF
+ * （private/unused）へ書き換える。IFD のエントリ数・他エントリの並びは変えないため、
+ * IFD 自体の再構築は不要でセグメント長も変わらない（GPS 除去と同じ理由、本ファイル冒頭コメント参照）。
+ *
+ * MakerNote（0x927C）はしばしばシリアル番号等を含む大きな不透明データだが、
+ * 「4 byte を超える値は外部領域をゼロ埋めする」という共通ロジックがそのまま効くため、
+ * タグ別の特別扱いは不要（このタグだけ値が大きいというだけの違い）。
+ * ポインタタグ（ExifIFD/GPSInfo）はセグメント構造そのものなので消さない。
+ */
+function removeExifTag(
+  bytes: Uint8Array,
+  view: DataView,
+  little: boolean,
+  tiffStart: number,
+  structure: ExifStructure,
+  ifdName: "ifd0" | "exif",
+  tag: number,
+): void {
+  if (isPointerTag(tag)) return;
+  const entries = ifdName === "ifd0" ? structure.ifd0 : structure.exifIfd;
+  if (!entries) return;
+  const entry = findEntry(entries, tag);
+  if (!entry) return;
+
+  const typeSize = TIFF_TYPE_SIZE[entry.type] ?? 1;
+  const valueBytes = typeSize * entry.count;
+  if (valueBytes > 4) {
+    const rel = view.getUint32(entry.entryOffset + 8, little);
+    const abs = tiffStart + rel;
+    // 壊れた count（書き込み先が定まらない）や、他の IFD/ヘッダーと重なる外部値は
+    // 手を付けずに諦める（GPS 除去の overlap ガードと同じ安全側判断）
+    if (!isInBounds(bytes.length, abs, valueBytes)) return;
+    if (overlapsParsedStructure(structure, [abs, abs + valueBytes])) return;
+    for (let i = 0; i < valueBytes; i++) bytes[abs + i] = 0;
+  }
+  if (isInBounds(bytes.length, entry.entryOffset + 8, 4)) {
+    for (let i = 0; i < 4; i++) bytes[entry.entryOffset + 8 + i] = 0;
+  }
+  if (isInBounds(bytes.length, entry.entryOffset, 2)) {
+    view.setUint16(entry.entryOffset, 0xffff, little); // タグ id を private/unused にして読めなくする
+  }
+}
+
+/**
  * Exif payload（"Exif\0\0" + TIFF データ）に固定長編集を適用したコピーを返す。
  * 入力を書き換えず、常に同じ長さの新しい Uint8Array を返す（セグメント長を変えない前提のため）。
  */
@@ -475,6 +731,10 @@ export function applyExifEdits(exifPayload: Uint8Array, edits: ExifEdits): Uint8
   }
   if (edits.removeGps) {
     zeroOutGps(bytes, view, little, tiffStart, structure);
+  }
+  for (const key of edits.removeTags) {
+    const parsed = parseExifTagKey(key);
+    if (parsed) removeExifTag(bytes, view, little, tiffStart, structure, parsed.ifd, parsed.tag);
   }
 
   return bytes;

@@ -138,6 +138,8 @@ export interface MetadataStageDetail {
   orientationForcedTo1: boolean;
   /** ICC プロファイルが保持されなかったか（canvas 出力は常に true。ロスレス経路ではユーザー選択次第） */
   iccDropped: boolean;
+  /** ユーザーが個別に消すと選んだ Exif タグの数（Exif セグメント自体が無ければ 0） */
+  tagsRemovedCount: number;
 }
 
 export interface OutputStageDetail {
@@ -464,6 +466,10 @@ async function computeMetadataStage(
   const removedBytes = segmentBytesSum(scan, (s) => removeIds.has(s.id));
   const keptBytes = scan.totalBytes - removedBytes;
   const hasIcc = scan.segments.some((s) => s.name === "APP2 ICC_PROFILE");
+  // Exif セグメント自体が無いのに「タグを N 件消去」と出すと何を消したのか分からなくなるため、
+  // Exif/eXIf が実在するときだけ選択中のタグ数をそのまま報告する
+  const hasExif = scan.segments.some((s) => s.name === "APP1 Exif" || s.name === "eXIf");
+  const tagsRemovedCount = hasExif ? exifEdits.removeTags.size : 0;
 
   if (!formatOutput.fromCanvas) {
     // ロスレス経路: 元バイト列がまだ生きているので、残す Exif には編集を焼き込んでから
@@ -485,6 +491,7 @@ async function computeMetadataStage(
         gpsRemoved: exifEdits.removeGps,
         orientationForcedTo1: false,
         iccDropped: hasIcc && removeIds.has(scan.segments.find((s) => s.name === "APP2 ICC_PROFILE")?.id ?? ""),
+        tagsRemovedCount,
       },
     };
   }
@@ -505,6 +512,7 @@ async function computeMetadataStage(
         gpsRemoved: exifEdits.removeGps,
         orientationForcedTo1: false,
         iccDropped: hasIcc,
+        tagsRemovedCount,
       },
     };
   }
@@ -532,6 +540,7 @@ async function computeMetadataStage(
         gpsRemoved: exifEdits.removeGps,
         orientationForcedTo1: false,
         iccDropped: hasIcc,
+        tagsRemovedCount,
       },
     };
   }
@@ -552,6 +561,7 @@ async function computeMetadataStage(
       gpsRemoved: exifEdits.removeGps,
       orientationForcedTo1: true,
       iccDropped: hasIcc,
+      tagsRemovedCount,
     },
   };
 }
@@ -820,9 +830,19 @@ export function defaultRemoveIds(scan: MetadataScanResult): Set<string> {
   return new Set(scan.segments.filter((s) => defaultRemoveForSegmentName(s.name)).map((s) => s.id));
 }
 
-/** セグメントの説明・中身プレビューはバイナリ由来のテキストのため、HTML として無害化してから差し込む */
-function escapeHtml(s: string): string {
+/** セグメントの説明・中身プレビュー・Exif タグ名等はバイナリ由来のテキストを含みうるため、
+ * HTML として無害化してから差し込む（main.ts の Exif タグテーブル組み立てからも使う） */
+export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+}
+
+/** APP1 Exif / eXIf の行にだけ挿す、タグテーブル差し込み用の空コンテナ。main.ts が
+ * segListEl.innerHTML を設定した直後にこの要素を見つけ、インタラクティブなタグテーブル
+ * （チェックボックス・Orientation/DateTime 系の編集欄・GPS IFD 疑似行）を組み立てて入れる。
+ * ここで文字列として組み立てないのは、編集欄が select/input への DOM 参照とイベント登録を
+ * 必要とするため（他の Exif 編集欄と同じ理由、本ファイル冒頭コメント参照）。 */
+function exifTagTableContainerHtml(segName: string): string {
+  return segName === "APP1 Exif" || segName === "eXIf" ? `<div class="pl-6 pt-1" data-exif-tag-table></div>` : "";
 }
 
 /**
@@ -830,7 +850,7 @@ function escapeHtml(s: string): string {
  * この形式（WebP/PNG/AVIF）へは引き継げないケースで、選択operationがもう意味を持たないことを
  * 視覚的にも伝えるために使う（disabled にするだけで、選択状態自体は保持する）。
  * 各行はチェックボックス+名前+バイト数の1行目、平易な説明の2行目、（読めれば）中身プレビューの3行目からなる。
- * APP1 Exif / eXIf は別枠の「Exif 詳細」テーブルで中身を見せるため、ここではプレビューを出さない。
+ * APP1 Exif / eXIf だけは、プレビューの代わりにタグテーブル用の空コンテナを持つ。
  */
 export function buildMetadataSegmentRowsHtml(
   scan: MetadataScanResult,
@@ -865,7 +885,7 @@ export function buildMetadataSegmentRowsHtml(
         `<label class="flex items-center justify-between gap-3 text-sm">` +
         `<span class="flex items-center gap-1.5"><input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="font-semibold text-foreground">${escapeHtml(seg.name)}</span></span>` +
         `<span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>` +
-        `</label>${descriptionHtml}${contentHtml}${iccNote}${mpfNote}` +
+        `</label>${descriptionHtml}${contentHtml}${iccNote}${mpfNote}${exifTagTableContainerHtml(seg.name)}` +
         `</div>`
       );
     })
@@ -880,30 +900,6 @@ export function buildMetadataTotalsHtml(removedBytes: number, keptBytes: number)
     `<span class="font-mono text-xs text-foreground">除去 ${formatBytes(removedBytes)} / 保持 ${formatBytes(keptBytes)}</span>` +
     `</div>`
   );
-}
-
-const EXIF_FIELD_LABELS: [key: keyof import("./exif").ExifTags, label: string][] = [
-  ["make", "Make"],
-  ["model", "Model"],
-  ["software", "Software"],
-  ["dateTime", "DateTime"],
-  ["dateTimeOriginal", "DateTimeOriginal"],
-  ["imageDescription", "ImageDescription"],
-  ["artist", "Artist"],
-  ["copyright", "Copyright"],
-];
-
-/** Exif 詳細テーブル（読み取り専用の一覧部分。Orientation と GPS は別行で扱う） */
-export function buildExifTableHtml(tags: import("./exif").ExifTags): string {
-  const rows = EXIF_FIELD_LABELS.filter(([key]) => tags[key] != null && tags[key] !== "")
-    .map(([key, label]) => detailRowHtml(label, String(tags[key])))
-    .join("");
-  const orientationRow = tags.orientation != null ? detailRowHtml("Orientation", String(tags.orientation)) : "";
-  const gpsRow = detailRowHtml(
-    "GPS 有無",
-    !tags.hasGps ? "なし" : tags.gpsLat != null && tags.gpsLon != null ? `あり（${tags.gpsLat.toFixed(4)}, ${tags.gpsLon.toFixed(4)}）` : "あり",
-  );
-  return rows + orientationRow + gpsRow;
 }
 
 /** メタデータカードの状態説明文（複数行になりうる） */
@@ -928,6 +924,9 @@ export function metadataStatusNotes(detail: MetadataStageDetail): string[] {
   if (detail.gpsRemoved && detail.scan.segments.some((s) => s.name === "APP1 Exif")) {
     notes.push("GPS 情報は値をゼロ埋めし、IFD からたどれないようにしました。");
   }
+  if (detail.tagsRemovedCount > 0) {
+    notes.push("タグ消去はサイズを変えません（値をゼロ埋めして無効化）。サイズを減らすには Exif ごと除去してください。");
+  }
   return notes;
 }
 
@@ -944,6 +943,7 @@ export function metadataSummaryLines(detail: MetadataStageDetail): string[] {
   if (detail.scan.segments.length === 0) return ["メタデータなし"];
   const lines = [`除去 ${formatBytes(detail.removedBytes)} / 保持 ${formatBytes(detail.keptBytes)}`];
   if (detail.iccDropped) lines.push("ICC 除去");
+  if (detail.tagsRemovedCount > 0) lines.push(`Exif タグ ${detail.tagsRemovedCount} 件を消去`);
   return lines;
 }
 

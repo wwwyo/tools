@@ -3,7 +3,18 @@ import "./styles.css";
 import { extractMetadata, formatBytes, loadImage, type ImageMeta } from "./imageMeta";
 import { detectFormatSupport, generateSampleFile, UnsupportedFormatError, type ProbedFormat } from "./encode";
 import { scanMetadata, type MetadataScanResult } from "./metadataStrip";
-import { extractExifPayload, parseExifStructure, readExifTags, type ExifEdits, type ExifTags } from "./exif";
+import {
+  exifTagHexLabel,
+  exifTagKey,
+  extractExifPayload,
+  isExifEntryRemovable,
+  listExifEntries,
+  parseExifStructure,
+  readExifTags,
+  type ExifEdits,
+  type ExifEntryInfo,
+  type ExifTags,
+} from "./exif";
 import {
   formatDelta,
   runPipeline,
@@ -14,7 +25,7 @@ import {
   buildFormatComparisonHtml,
   buildMetadataSegmentRowsHtml,
   buildMetadataTotalsHtml,
-  buildExifTableHtml,
+  escapeHtml,
   metadataStatusNotes,
   metadataSummaryLines,
   defaultRemoveIds,
@@ -214,7 +225,7 @@ const state: AppState = {
   longEdgeCap: null,
   formatChoice: "original",
   removeIds: new Set<string>(),
-  exifEdits: { removeGps: false },
+  exifEdits: { removeGps: false, removeTags: new Set() },
   metadataScan: null,
   exifTags: null,
   metadataControls: null,
@@ -287,12 +298,8 @@ function buildFormatControls(): FormatControls {
 interface MetadataControls {
   rootEl: HTMLDivElement;
   segListEl: HTMLDivElement;
-  orientationSelectEl: HTMLSelectElement | null;
-  dateTimeInputEl: HTMLInputElement | null;
-  dateTimeHintEl: HTMLParagraphElement | null;
-  dateTimeOriginalInputEl: HTMLInputElement | null;
-  dateTimeOriginalHintEl: HTMLParagraphElement | null;
-  gpsCheckboxEl: HTMLInputElement | null;
+  /** Exif/eXIf 行があれば、その中のタグテーブル用コンテナ（`pipeline.ts` の `buildMetadataSegmentRowsHtml` が空で用意する） */
+  exifTagTableEl: HTMLDivElement | null;
 }
 
 const ORIENTATION_LABELS: Record<number, string> = {
@@ -312,14 +319,173 @@ function buildOrientationOptionsHtml(current: number): string {
     .join("");
 }
 
+// IFD0 / Exif IFD のうち、素の値表示ではなく編集用フォームを value セルに出すタグ。
+// exif.ts の TAG_* 定数は export していないため、UI 側の対応表としてここに直書きする
+// （固定長編集の対象 3 タグのみで、増減の予定が無いため別ファイルに切り出す理由が薄い）
+const TAG_ORIENTATION = 0x0112;
+const TAG_DATETIME = 0x0132;
+const TAG_DATETIME_ORIGINAL = 0x9003;
+const DATETIME_PATTERN = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/** タグキー→編集要素セレクタの対応表。renderMetadataDetail が「消す」チェック済みの編集欄を
+ * disabled のまま保つ（テーブル全体の disabled 判定とは独立に）ために使う */
+const EXIF_EDITOR_SELECTOR_BY_KEY: readonly [string, string][] = [
+  [exifTagKey("ifd0", TAG_ORIENTATION), "#exif-orientation-select"],
+  [exifTagKey("ifd0", TAG_DATETIME), "#exif-datetime-input"],
+  [exifTagKey("exif", TAG_DATETIME_ORIGINAL), "#exif-datetime-original-input"],
+];
+
+/** DateTime 系タグの value セル（テキスト入力 + 下に隠れているヒント）を組み立てる */
+function buildDateTimeEditorHtml(inputId: string, hintId: string, currentValue: string | null): string {
+  return (
+    `<div class="flex flex-col gap-0.5">` +
+    `<input id="${inputId}" type="text" maxlength="19" placeholder="YYYY:MM:DD HH:MM:SS" value="${escapeHtml(currentValue ?? "")}" ` +
+    `class="w-40 rounded border border-border bg-background px-1 py-0.5 font-mono text-foreground" />` +
+    `<p id="${hintId}" class="hidden text-destructive">YYYY:MM:DD HH:MM:SS・19文字</p>` +
+    `</div>`
+  );
+}
+
+/** タグ1件の value セルの中身。固定長編集の対象タグだけフォームを出し、それ以外は表示専用 */
+function buildExifValueCellHtml(entry: ExifEntryInfo, exifTags: ExifTags): string {
+  if (entry.ifd === "ifd0" && entry.tag === TAG_ORIENTATION) {
+    return `<select id="exif-orientation-select" class="rounded border border-border bg-background px-1 py-0.5 text-foreground">${buildOrientationOptionsHtml(exifTags.orientation ?? 1)}</select>`;
+  }
+  if (entry.ifd === "ifd0" && entry.tag === TAG_DATETIME) {
+    return buildDateTimeEditorHtml("exif-datetime-input", "exif-datetime-hint", exifTags.dateTime);
+  }
+  if (entry.ifd === "exif" && entry.tag === TAG_DATETIME_ORIGINAL) {
+    return buildDateTimeEditorHtml("exif-datetime-original-input", "exif-datetime-original-hint", exifTags.dateTimeOriginal);
+  }
+  return `<span class="truncate" title="${escapeHtml(entry.display)}">${escapeHtml(entry.display)}</span>`;
+}
+
+/** タグ1件を1行にする。消せないタグ（ポインタ・壊れた値）はチェックボックスの代わりに空白を置く */
+function buildExifTagRowHtml(entry: ExifEntryInfo, removeTags: ReadonlySet<string>, exifTags: ExifTags): string {
+  const removable = isExifEntryRemovable(entry);
+  const key = exifTagKey(entry.ifd, entry.tag);
+  const checked = removeTags.has(key);
+  const label = entry.name ?? exifTagHexLabel(entry.tag);
+  const checkboxHtml = removable
+    ? `<input type="checkbox" class="asshukusan-exif-tag-checkbox accent-primary shrink-0" data-tag-key="${key}"${checked ? " checked" : ""} />`
+    : `<span class="inline-block w-3.5 shrink-0"></span>`;
+  return (
+    `<div class="flex items-center gap-2 border-b border-border/40 py-1 last:border-b-0">` +
+    `<label class="flex w-40 shrink-0 items-center gap-1.5">${checkboxHtml}<span class="truncate font-semibold text-foreground" title="${escapeHtml(label)}">${escapeHtml(label)}</span></label>` +
+    `<span class="min-w-0 flex-1">${buildExifValueCellHtml(entry, exifTags)}</span>` +
+    `<span class="w-14 shrink-0 text-right font-mono text-muted-foreground">${formatBytes(entry.valueBytes)}</span>` +
+    `</div>`
+  );
+}
+
+/** GPS IFD は「GPS 情報を消す（whole GPS IFD）」の既存チェックボックスのまま、タグテーブルの疑似行として出す */
+function buildGpsPseudoRowHtml(exifTags: ExifTags): string {
+  const latLon =
+    exifTags.gpsLat != null && exifTags.gpsLon != null ? `${exifTags.gpsLat.toFixed(4)}, ${exifTags.gpsLon.toFixed(4)}` : "あり";
+  return (
+    `<div class="flex items-center gap-2 border-b border-border/40 py-1 last:border-b-0">` +
+    `<label class="flex w-40 shrink-0 items-center gap-1.5">` +
+    `<input type="checkbox" id="exif-gps-remove" class="accent-primary shrink-0" />` +
+    `<span class="truncate font-semibold text-foreground">GPS IFD</span>` +
+    `</label>` +
+    `<span class="min-w-0 flex-1 truncate">${escapeHtml(latLon)}</span>` +
+    `<span class="w-14 shrink-0"></span>` +
+    `</div>`
+  );
+}
+
+/** Exif/eXIf 行のタグテーブル（IFD0 + Exif IFD の全エントリ + GPS IFD 疑似行）の中身 */
+function buildExifTagTableHtml(entries: ExifEntryInfo[], exifTags: ExifTags, removeTags: ReadonlySet<string>): string {
+  const rows = entries.map((entry) => buildExifTagRowHtml(entry, removeTags, exifTags)).join("");
+  const gpsRow = exifTags.hasGps ? buildGpsPseudoRowHtml(exifTags) : "";
+  return `<div class="flex flex-col text-xs">${rows}${gpsRow}</div>`;
+}
+
+/** removeTags は ReadonlySet で公開しているため、変更のたびに新しい Set を作って state へ入れ替える（in-place mutate しない） */
+function toggleRemoveTag(key: string, checked: boolean): void {
+  const next = new Set(state.exifEdits.removeTags);
+  if (checked) next.add(key);
+  else next.delete(key);
+  state.exifEdits.removeTags = next;
+}
+
 /**
- * メタデータカードのコントロール（セグメント一覧の除去チェックボックス + Exif の編集フィールド）は
+ * タグテーブル内の DateTime 系編集欄・GPS チェックボックスへイベントを配線する。
+ * Orientation/DateTime/DateTimeOriginal は「消す」チェックボックスを ON にした瞬間に
+ * 編集欄を disabled にする必要があるため、チェックボックスの change ハンドラからも
+ * ここで作った要素を参照できるよう、対応表（タグキー→編集要素）を返す。
+ */
+function wireExifTagTable(containerEl: HTMLDivElement, exifTags: ExifTags): void {
+  const orientationEditorEl = containerEl.querySelector<HTMLSelectElement>("#exif-orientation-select");
+  orientationEditorEl?.addEventListener("change", () => {
+    state.exifEdits.orientation = Number.parseInt(orientationEditorEl.value, 10);
+    scheduleRecompute();
+  });
+
+  const wireDateTimeEditor = (
+    inputId: string,
+    hintId: string,
+    apply: (value: string | undefined) => void,
+  ): HTMLInputElement | null => {
+    const inputEl = containerEl.querySelector<HTMLInputElement>(`#${inputId}`);
+    const hintEl = containerEl.querySelector<HTMLParagraphElement>(`#${hintId}`);
+    inputEl?.addEventListener("input", () => {
+      const value = inputEl.value;
+      const valid = DATETIME_PATTERN.test(value);
+      hintEl?.classList.toggle("hidden", valid || value.length === 0);
+      apply(valid ? value : undefined);
+      // 空欄・不正値へ変えたときも「編集を無かったことにする」という状態変化なので、
+      // 再計算しないと直前の値を書き込んだままの結果が残ってしまう
+      scheduleRecompute();
+    });
+    return inputEl;
+  };
+  const dateTimeEditorEl = wireDateTimeEditor("exif-datetime-input", "exif-datetime-hint", (value) => {
+    if (value != null) state.exifEdits.dateTime = value;
+    else delete state.exifEdits.dateTime;
+  });
+  const dateTimeOriginalEditorEl = wireDateTimeEditor("exif-datetime-original-input", "exif-datetime-original-hint", (value) => {
+    if (value != null) state.exifEdits.dateTimeOriginal = value;
+    else delete state.exifEdits.dateTimeOriginal;
+  });
+
+  const gpsCheckboxEl = containerEl.querySelector<HTMLInputElement>("#exif-gps-remove");
+  if (gpsCheckboxEl) {
+    gpsCheckboxEl.checked = exifTags.hasGps;
+    gpsCheckboxEl.addEventListener("change", () => {
+      state.exifEdits.removeGps = gpsCheckboxEl.checked;
+      scheduleRecompute();
+    });
+  }
+
+  // 固定長編集の対象タグは、「消す」チェックが付いた瞬間にその編集欄を disabled にする
+  // （消すと編集は意味を持たなくなるため。GPS IFD は独立のチェックボックスなのでここでは扱わない）
+  const editorByTagKey = new Map<string, HTMLInputElement | HTMLSelectElement>();
+  if (orientationEditorEl) editorByTagKey.set(exifTagKey("ifd0", TAG_ORIENTATION), orientationEditorEl);
+  if (dateTimeEditorEl) editorByTagKey.set(exifTagKey("ifd0", TAG_DATETIME), dateTimeEditorEl);
+  if (dateTimeOriginalEditorEl) editorByTagKey.set(exifTagKey("exif", TAG_DATETIME_ORIGINAL), dateTimeOriginalEditorEl);
+
+  containerEl.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("asshukusan-exif-tag-checkbox")) return;
+    const key = target.dataset.tagKey;
+    if (!key) return;
+    toggleRemoveTag(key, target.checked);
+    const editorEl = editorByTagKey.get(key);
+    if (editorEl) editorEl.disabled = target.checked;
+    scheduleRecompute();
+  });
+}
+
+/**
+ * メタデータカードのコントロール（セグメント一覧の除去チェックボックス + Exif のタグテーブル）は
  * 画像の中身（検出セグメント・Exif の有無）に依存するため、他カードのように起動時1回ではなく
  * 画像読み込みごとに作り直す。以降の再計算（recompute）では中身を作り直さず、この DOM をそのまま使い回す。
  */
 function buildMetadataControls(
   scan: MetadataScanResult,
   exifTags: ExifTags | null,
+  exifEntries: ExifEntryInfo[],
   originalArrayBuffer: ArrayBuffer,
 ): MetadataControls {
   const rootEl = document.createElement("div");
@@ -345,102 +511,15 @@ function buildMetadataControls(
     scheduleRecompute();
   });
 
-  let orientationSelectEl: HTMLSelectElement | null = null;
-  let dateTimeInputEl: HTMLInputElement | null = null;
-  let dateTimeHintEl: HTMLParagraphElement | null = null;
-  let dateTimeOriginalInputEl: HTMLInputElement | null = null;
-  let dateTimeOriginalHintEl: HTMLParagraphElement | null = null;
-  let gpsCheckboxEl: HTMLInputElement | null = null;
-
-  if (exifTags) {
-    const exifSection = document.createElement("div");
-    exifSection.className = "flex flex-col gap-2 border-t border-border/60 pt-2";
-    exifSection.innerHTML = `
-      <span class="text-sm font-semibold text-foreground">Exif 詳細</span>
-      <div id="exif-table" class="flex flex-col"></div>
-      <div class="flex flex-col gap-2 pt-1">
-        <label class="flex items-center gap-2">
-          <span class="w-32 shrink-0">Orientation</span>
-          <select id="orientation-select" class="rounded border border-border bg-background px-1.5 py-1 text-foreground"></select>
-        </label>
-        <label class="flex items-center gap-2">
-          <span class="w-32 shrink-0">DateTime</span>
-          <input id="datetime-input" type="text" maxlength="19" pattern="\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}" placeholder="YYYY:MM:DD HH:MM:SS" class="w-44 rounded border border-border bg-background px-1.5 py-1 font-mono text-foreground" />
-        </label>
-        <p id="datetime-hint" class="hidden pl-32 text-destructive">YYYY:MM:DD HH:MM:SS 形式・19文字で入力してください</p>
-        <label class="flex items-center gap-2">
-          <span class="w-32 shrink-0">DateTimeOriginal</span>
-          <input id="datetime-original-input" type="text" maxlength="19" pattern="\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}" placeholder="YYYY:MM:DD HH:MM:SS" class="w-44 rounded border border-border bg-background px-1.5 py-1 font-mono text-foreground" />
-        </label>
-        <p id="datetime-original-hint" class="hidden pl-32 text-destructive">YYYY:MM:DD HH:MM:SS 形式・19文字で入力してください</p>
-        <label class="flex items-center gap-1.5">
-          <input type="checkbox" id="gps-remove" class="accent-primary" />
-          <span>GPS 情報を消す</span>
-        </label>
-      </div>
-    `;
-    rootEl.append(exifSection);
-
-    const exifTableEl = exifSection.querySelector("#exif-table") as HTMLDivElement;
-    exifTableEl.innerHTML = buildExifTableHtml(exifTags);
-
-    orientationSelectEl = exifSection.querySelector("#orientation-select") as HTMLSelectElement;
-    orientationSelectEl.innerHTML = buildOrientationOptionsHtml(exifTags.orientation ?? 1);
-    orientationSelectEl.addEventListener("change", () => {
-      state.exifEdits.orientation = Number.parseInt((orientationSelectEl as HTMLSelectElement).value, 10);
-      scheduleRecompute();
-    });
-
-    dateTimeInputEl = exifSection.querySelector("#datetime-input") as HTMLInputElement;
-    dateTimeHintEl = exifSection.querySelector("#datetime-hint") as HTMLParagraphElement;
-    if (exifTags.dateTime) dateTimeInputEl.value = exifTags.dateTime;
-    dateTimeInputEl.addEventListener("input", () => {
-      const value = (dateTimeInputEl as HTMLInputElement).value;
-      const valid = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/.test(value);
-      (dateTimeHintEl as HTMLParagraphElement).classList.toggle("hidden", valid || value.length === 0);
-      if (valid) {
-        state.exifEdits.dateTime = value;
-      } else {
-        delete state.exifEdits.dateTime;
-      }
-      // 空欄・不正値へ変えたときも「編集を無かったことにする」という状態変化なので、
-      // 再計算しないと直前の値を書き込んだままの結果が残ってしまう
-      scheduleRecompute();
-    });
-
-    dateTimeOriginalInputEl = exifSection.querySelector("#datetime-original-input") as HTMLInputElement;
-    dateTimeOriginalHintEl = exifSection.querySelector("#datetime-original-hint") as HTMLParagraphElement;
-    if (exifTags.dateTimeOriginal) dateTimeOriginalInputEl.value = exifTags.dateTimeOriginal;
-    dateTimeOriginalInputEl.addEventListener("input", () => {
-      const value = (dateTimeOriginalInputEl as HTMLInputElement).value;
-      const valid = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/.test(value);
-      (dateTimeOriginalHintEl as HTMLParagraphElement).classList.toggle("hidden", valid || value.length === 0);
-      if (valid) {
-        state.exifEdits.dateTimeOriginal = value;
-      } else {
-        delete state.exifEdits.dateTimeOriginal;
-      }
-      scheduleRecompute();
-    });
-
-    gpsCheckboxEl = exifSection.querySelector("#gps-remove") as HTMLInputElement;
-    gpsCheckboxEl.checked = exifTags.hasGps;
-    gpsCheckboxEl.addEventListener("change", () => {
-      state.exifEdits.removeGps = (gpsCheckboxEl as HTMLInputElement).checked;
-      scheduleRecompute();
-    });
+  // buildMetadataSegmentRowsHtml が APP1 Exif / eXIf 行の中に用意した空コンテナへ、
+  // インタラクティブなタグテーブル（チェックボックス・編集欄）を差し込む
+  const exifTagTableEl = segListEl.querySelector<HTMLDivElement>("[data-exif-tag-table]");
+  if (exifTagTableEl && exifTags) {
+    exifTagTableEl.innerHTML = buildExifTagTableHtml(exifEntries, exifTags, state.exifEdits.removeTags);
+    wireExifTagTable(exifTagTableEl, exifTags);
   }
 
-  return {
-    rootEl,
-    segListEl,
-    orientationSelectEl,
-    dateTimeInputEl,
-    dateTimeHintEl,
-    dateTimeOriginalInputEl,
-    dateTimeOriginalHintEl,
-    gpsCheckboxEl,
-  };
+  return { rootEl, segListEl, exifTagTableEl: exifTagTableEl ?? null };
 }
 
 const formatControls = buildFormatControls();
@@ -1189,6 +1268,25 @@ function renderMetadataDetail(): void {
   controls.segListEl.querySelectorAll<HTMLInputElement>(".asshukusan-seg-checkbox").forEach((el) => {
     el.disabled = checkboxesDisabled;
   });
+  // Exif セグメント自体を除去する設定になっている（または全体が disabled）ときは、
+  // タグ単位の操作はもう意味を持たない（セグメント除去が優先される）ため、タグテーブルごと dim する
+  const exifSeg = d.scan.segments.find((s) => s.name === "APP1 Exif" || s.name === "eXIf");
+  const exifTagsDisabled = checkboxesDisabled || (exifSeg != null && state.removeIds.has(exifSeg.id));
+  if (controls.exifTagTableEl) {
+    const tableEl = controls.exifTagTableEl;
+    tableEl.classList.toggle("opacity-50", exifTagsDisabled);
+    tableEl.classList.toggle("pointer-events-none", exifTagsDisabled);
+    tableEl.querySelectorAll<HTMLInputElement>(".asshukusan-exif-tag-checkbox").forEach((el) => {
+      el.disabled = exifTagsDisabled;
+    });
+    const gpsCheckboxEl = tableEl.querySelector<HTMLInputElement>("#exif-gps-remove");
+    if (gpsCheckboxEl) gpsCheckboxEl.disabled = exifTagsDisabled;
+    // 固定長編集欄は、テーブル全体が disabled でなくても「消す」が付いていれば個別に disabled のまま
+    for (const [key, selector] of EXIF_EDITOR_SELECTOR_BY_KEY) {
+      const editorEl = tableEl.querySelector<HTMLInputElement | HTMLSelectElement>(selector);
+      if (editorEl) editorEl.disabled = exifTagsDisabled || state.exifEdits.removeTags.has(key);
+    }
+  }
   const notesHtml = metadataStatusNotes(d)
     .map((note) => `<p class="text-xs text-muted-foreground">${note}</p>`)
     .join("");
@@ -1484,6 +1582,7 @@ async function handleFileSelected(file: File, generation: number = nextLoadGener
     const exifPayload = extractExifPayload(originalArrayBuffer, meta.sniffedFormat, metadataScan);
     const exifStructure = exifPayload ? parseExifStructure(exifPayload) : null;
     const exifTags = exifPayload && exifStructure ? readExifTags(exifPayload, exifStructure) : null;
+    const exifEntries = exifPayload ? listExifEntries(exifPayload) : [];
 
     // ここまでで新しい画像の派生データが揃った。以降は旧オブジェクト URL の破棄と
     // state の入れ替えを同期的に一括で行う
@@ -1499,7 +1598,7 @@ async function handleFileSelected(file: File, generation: number = nextLoadGener
     state.longEdgeCap = null;
     state.formatChoice = "original";
     state.removeIds = defaultRemoveIds(metadataScan);
-    state.exifEdits = { removeGps: exifTags?.hasGps ?? false };
+    state.exifEdits = { removeGps: exifTags?.hasGps ?? false, removeTags: new Set() };
     state.metadataScan = metadataScan;
     state.exifTags = exifTags;
     state.activeStage = "original";
@@ -1517,7 +1616,7 @@ async function handleFileSelected(file: File, generation: number = nextLoadGener
     // 描画で確実に作り直させるためここでも明示的にリセットしておく
     lastRenderedSizeLadderRows = null;
     lastRenderedFormatComparison = null;
-    state.metadataControls = buildMetadataControls(metadataScan, exifTags, originalArrayBuffer);
+    state.metadataControls = buildMetadataControls(metadataScan, exifTags, exifEntries, originalArrayBuffer);
 
     resultSectionEl.classList.remove("hidden");
     resultSectionEl.classList.add("flex");
