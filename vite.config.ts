@@ -357,11 +357,6 @@ export default defineConfig({
   // wasm を相対解決する。dev の esbuild pre-bundle がこのモジュールをキャッシュへコピーすると
   // import.meta.url がコピー先を指してしまい wasm の相対パスが壊れるため、pre-bundle 対象から外す
   optimizeDeps: { exclude: ['@jsquash/avif'] },
-  // asshukusan/encode.worker.ts は内部で `import("@jsquash/avif")` を動的 import する。既定の
-  // worker.format ('iife') は動的 import をチャンク分割できず、@jsquash/avif の
-  // `new URL('avif_enc.wasm', import.meta.url)` の相対解決が壊れる（optimizeDeps.exclude と
-  // 同じ理由）。'es' にして worker を ES module としてビルドし、import.meta.url を保つ
-  worker: { format: 'es' },
   plugins: [
     faviconPlugin(),
     headerPlugin(),
