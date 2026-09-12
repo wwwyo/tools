@@ -17,6 +17,13 @@ export interface MetadataSegment {
   /** 元バッファ内でのこのセグメント/チャンクの開始・終了オフセット（マーカー/チャンクヘッダーを含む） */
   start: number;
   end: number;
+  /**
+   * ペイロード（マーカー/チャンクヘッダーの直後）の開始オフセット。JPEG は 0xFF の fill byte
+   * （ITU-T T.81 B.1.1.5）が任意個数入りうるため `start + 4` では実際のマーカーコード位置とずれる。
+   * ここには `readNextJpegMarker` が返す `headerStart + 2`（長さフィールドの直後）を入れる。
+   * PNG チャンク・WebP チャンクはヘッダーが固定 8 byte のため `start + 8` になる。
+   */
+  payloadStart: number;
 }
 
 /** 元ファイルのメタデータ走査結果 */
@@ -47,6 +54,9 @@ const XMP_APP1_HEADER = "http://ns.adobe.com/xap/1.0/\0";
 /** ICC プロファイルの識別子（"ICC_PROFILE" + NUL の 12 byte） */
 const ICC_APP2_HEADER = "ICC_PROFILE\0";
 
+/** MPO（マルチピクチャフォーマット）の索引を持つ APP2 の識別子（"MPF" + NUL の 4 byte） */
+const MPF_APP2_HEADER = "MPF\0";
+
 /**
  * APPn / COM セグメントのうちメタデータとして除去対象になるものだけラベルを返す。
  * APP0 (JFIF) や DQT/SOF/DHT/SOS などデコードに必要なセグメントは null を返し素通りさせる。
@@ -59,7 +69,9 @@ function classifyJpegSegment(marker: number, bytes: Uint8Array, payloadStart: nu
   }
   if (marker === 0xffe2) {
     if (asciiAt(bytes, payloadStart, ICC_APP2_HEADER.length) === ICC_APP2_HEADER) return "APP2 ICC_PROFILE";
-    return "APP2"; // ICC 以外の APP2（稀）も未分類の付随データとして除去対象に含める
+    // MPO の副画像索引（MPF）は既定で保持したい未知データの代表例のため、専用ラベルを分ける
+    if (asciiAt(bytes, payloadStart, MPF_APP2_HEADER.length) === MPF_APP2_HEADER) return "APP2 MPF";
+    return "APP2"; // それ以外の未知 APP2 も、正体不明のまま既定で保持する付随データとして扱う
   }
   if (marker === 0xffed) return "APP13 Photoshop";
   if (marker === 0xfffe) return "COM";
@@ -90,11 +102,13 @@ export function readNextJpegMarker(
 /**
  * JPEG のマーカー列を SOS まで走査する。onSegment は素通りマーカーにも呼ばれ、null 判定は呼び出し側が行う。
  * `ok: false` は構造的に壊れている（長さが不正・範囲外）ことを表し、呼び出し側は原本を無加工で通す。
+ * onMarker の最後の引数 `headerStart` は `readNextJpegMarker` が返すマーカーコード直後の位置で、
+ * 呼び出し側が payload の開始（`headerStart + 2`。長さフィールドの直後）を求めるのに使う。
  */
 function walkJpegMarkers(
   bytes: Uint8Array,
   view: DataView,
-  onMarker: (marker: number, segStart: number, segEnd: number, label: string | null) => void,
+  onMarker: (marker: number, segStart: number, segEnd: number, label: string | null, headerStart: number) => void,
 ): { sosOffset: number; ok: boolean } {
   let offset = 2; // SOI を読み飛ばす
   while (offset < bytes.length) {
@@ -105,7 +119,7 @@ function walkJpegMarkers(
     if (marker === 0xffda) return { sosOffset: segStart, ok: true }; // SOS: ここから先は圧縮データなのでマーカー走査を終える
     if (marker >= 0xffd0 && marker <= 0xffd7) {
       // RST0-7 は長さを持たない
-      onMarker(marker, segStart, headerStart, null);
+      onMarker(marker, segStart, headerStart, null, headerStart);
       offset = headerStart;
       continue;
     }
@@ -115,7 +129,7 @@ function walkJpegMarkers(
     const segEnd = headerStart + length;
     if (segEnd > bytes.length) return { sosOffset: bytes.length, ok: false };
     const label = classifyJpegSegment(marker, bytes, headerStart + 2);
-    onMarker(marker, segStart, segEnd, label);
+    onMarker(marker, segStart, segEnd, label, headerStart);
     offset = segEnd;
   }
   return { sosOffset: bytes.length, ok: true };
@@ -129,35 +143,102 @@ function nextId(counts: Map<string, number>, name: string): string {
 }
 
 /** APP2 ICC_PROFILE の seqNo/numMarkers（"ICC_PROFILE\0"(12) の直後の2byte）を読む。読めなければ null */
-function iccMarkerInfo(bytes: Uint8Array, segStart: number): { seqNo: number; numMarkers: number } | null {
-  const p = segStart + 4 + ICC_APP2_HEADER.length; // マーカー(2)+長さ(2) + "ICC_PROFILE\0"(12)
+function iccMarkerInfo(bytes: Uint8Array, payloadStart: number): { seqNo: number; numMarkers: number } | null {
+  const p = payloadStart + ICC_APP2_HEADER.length;
   if (p + 2 > bytes.length) return null;
   return { seqNo: byteAt(bytes, p), numMarkers: byteAt(bytes, p + 1) };
 }
 
-/** 複数チャンクに分割された ICC プロファイル（numMarkers > 1）は全チャンクへ同じ id を振り、1つのチェックボックスで一括除去できるようにする */
+/** 複数チャンクに分割された ICC プロファイル（有効なグループ）は全チャンクへ同じ id を振り、1つのチェックボックスで一括除去できるようにする */
 const ICC_GROUP_ID = "APP2 ICC_PROFILE#group";
 
-function jpegSegmentId(bytes: Uint8Array, segStart: number, label: string, counts: Map<string, number>): string {
-  if (label === "APP2 ICC_PROFILE") {
-    const info = iccMarkerInfo(bytes, segStart);
-    if (info && info.numMarkers > 1) return ICC_GROUP_ID;
+interface IccPieceInfo {
+  segStart: number;
+  seqNo: number;
+  numMarkers: number;
+}
+
+/** バッファ全体を1回走査し、APP2 ICC_PROFILE の各ピースの seqNo/numMarkers を集める */
+function collectIccPieces(bytes: Uint8Array, view: DataView): IccPieceInfo[] {
+  const pieces: IccPieceInfo[] = [];
+  walkJpegMarkers(bytes, view, (_marker, segStart, _segEnd, label, headerStart) => {
+    if (label !== "APP2 ICC_PROFILE") return;
+    const info = iccMarkerInfo(bytes, headerStart + 2);
+    if (info) pieces.push({ segStart, seqNo: info.seqNo, numMarkers: info.numMarkers });
+  });
+  return pieces;
+}
+
+/**
+ * 分割 ICC を1グループとして扱ってよいかを判定する。全ピースが同じ numMarkers を共有し、
+ * seqNo が 1..numMarkers を過不足なく1回ずつ覆っているときだけ有効なグループとみなし、
+ * そのグループに属する segStart の集合を返す。条件を満たさない（壊れている・混線している）
+ * 場合は空集合を返し、呼び出し側は各ピースを個別セグメントとして扱う
+ */
+function validIccGroupSegStarts(pieces: IccPieceInfo[]): ReadonlySet<number> {
+  if (pieces.length < 2) return new Set();
+  const numMarkers = pieces[0]?.numMarkers ?? 0;
+  if (numMarkers < 2 || pieces.length !== numMarkers) return new Set();
+  if (!pieces.every((p) => p.numMarkers === numMarkers)) return new Set();
+  const seqNos = pieces.map((p) => p.seqNo).toSorted((a, b) => a - b);
+  for (let i = 0; i < numMarkers; i++) {
+    if (seqNos[i] !== i + 1) return new Set();
   }
+  return new Set(pieces.map((p) => p.segStart));
+}
+
+function jpegSegmentId(segStart: number, label: string, counts: Map<string, number>, iccGroupSegStarts: ReadonlySet<number>): string {
+  if (label === "APP2 ICC_PROFILE" && iccGroupSegStarts.has(segStart)) return ICC_GROUP_ID;
   return nextId(counts, label);
+}
+
+/** グループ化された ICC ピースを1行（バイト数の合計・先頭ピース基準の範囲）へまとめる。UI で同じ id のチェックボックスが複数出るのを防ぐ */
+function mergeIccGroup(segments: MetadataSegment[]): MetadataSegment[] {
+  const groupSegs = segments.filter((s) => s.id === ICC_GROUP_ID);
+  if (groupSegs.length < 2) return segments;
+  const first = groupSegs[0];
+  const last = groupSegs[groupSegs.length - 1];
+  if (!first || !last) return segments;
+  const merged: MetadataSegment = {
+    id: ICC_GROUP_ID,
+    name: "APP2 ICC_PROFILE",
+    bytes: groupSegs.reduce((sum, s) => sum + s.bytes, 0),
+    start: first.start,
+    end: last.end,
+    payloadStart: first.payloadStart, // プロファイル名プレビューは先頭ピースの ICC ヘッダーから読む
+  };
+  const result: MetadataSegment[] = [];
+  let inserted = false;
+  for (const seg of segments) {
+    if (seg.id === ICC_GROUP_ID) {
+      if (!inserted) {
+        result.push(merged);
+        inserted = true;
+      }
+      continue;
+    }
+    result.push(seg);
+  }
+  return result;
 }
 
 function scanJpegMetadata(buf: ArrayBuffer): MetadataScanResult {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
+  const iccGroupSegStarts = validIccGroupSegStarts(collectIccPieces(bytes, view));
   const segments: MetadataSegment[] = [];
   const counts = new Map<string, number>();
-  const { ok } = walkJpegMarkers(bytes, view, (_marker, segStart, segEnd, label) => {
-    if (label) segments.push({ id: jpegSegmentId(bytes, segStart, label, counts), name: label, bytes: segEnd - segStart, start: segStart, end: segEnd });
+  const { ok } = walkJpegMarkers(bytes, view, (_marker, segStart, segEnd, label, headerStart) => {
+    if (!label) return;
+    const payloadStart = headerStart + 2;
+    const id = jpegSegmentId(segStart, label, counts, iccGroupSegStarts);
+    segments.push({ id, name: label, bytes: segEnd - segStart, start: segStart, end: segEnd, payloadStart });
   });
+  const merged = ok ? mergeIccGroup(segments) : [];
   return {
     format: "jpeg",
-    segments: ok ? segments : [],
-    totalBytes: ok ? segments.reduce((sum, s) => sum + s.bytes, 0) : 0,
+    segments: merged,
+    totalBytes: ok ? merged.reduce((sum, s) => sum + s.bytes, 0) : 0,
     strippable: ok,
   };
 }
@@ -166,6 +247,7 @@ function scanJpegMetadata(buf: ArrayBuffer): MetadataScanResult {
 function stripJpegMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): ArrayBuffer {
   const bytes = new Uint8Array(buf);
   const view = new DataView(buf);
+  const iccGroupSegStarts = validIccGroupSegStarts(collectIccPieces(bytes, view));
   const chunks: Uint8Array[] = [bytes.subarray(0, 2)]; // SOI
   const counts = new Map<string, number>();
   const { sosOffset, ok } = walkJpegMarkers(bytes, view, (_marker, segStart, segEnd, label) => {
@@ -173,7 +255,7 @@ function stripJpegMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): Ar
       chunks.push(bytes.subarray(segStart, segEnd));
       return;
     }
-    const id = jpegSegmentId(bytes, segStart, label, counts);
+    const id = jpegSegmentId(segStart, label, counts, iccGroupSegStarts);
     if (!removeIds.has(id)) chunks.push(bytes.subarray(segStart, segEnd));
   });
   if (!ok) return buf; // 構造的に壊れているときは原本をそのまま返す（呼び出し側は scan.strippable === false で判定済み）
@@ -186,20 +268,28 @@ function stripJpegMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): Ar
 /** 除去対象の PNG 補助チャンク（デコードに不要なもののみ） */
 const PNG_STRIP_CHUNK_TYPES = new Set(["tEXt", "zTXt", "iTXt", "eXIf", "iCCP", "tIME"]);
 
+/**
+ * PNG チャンク列を IEND まで走査する。`ok: false` はチャンク長がバッファをはみ出す・
+ * CRC の 4 byte が途中で切れている・IEND に辿り着けない（=末尾が壊れている）ことを表し、
+ * 呼び出し側はこの走査結果を使わず原本を無加工で通す（`Math.min` でオフセットを丸めて
+ * 誤った境界のまま処理を続けない）。
+ */
 function walkPngChunks(
   bytes: Uint8Array,
   view: DataView,
   onChunk: (type: string, start: number, end: number) => void,
-): void {
+): { ok: boolean } {
   let offset = 8; // PNG シグネチャ
   while (offset + 8 <= bytes.length) {
     const length = view.getUint32(offset);
     const type = asciiAt(bytes, offset + 4, 4);
     const end = offset + 8 + length + 4; // len(4) + type(4) + data(length) + CRC(4)
-    onChunk(type, offset, Math.min(end, bytes.length));
+    if (end > bytes.length) return { ok: false };
+    onChunk(type, offset, end);
     offset = end;
-    if (type === "IEND") break;
+    if (type === "IEND") return { ok: true };
   }
+  return { ok: false }; // ループを抜けた = IEND に辿り着く前にバッファが尽きた
 }
 
 function scanPngMetadata(buf: ArrayBuffer): MetadataScanResult {
@@ -207,14 +297,16 @@ function scanPngMetadata(buf: ArrayBuffer): MetadataScanResult {
   const view = new DataView(buf);
   const segments: MetadataSegment[] = [];
   const counts = new Map<string, number>();
-  walkPngChunks(bytes, view, (type, start, end) => {
-    if (PNG_STRIP_CHUNK_TYPES.has(type)) segments.push({ id: nextId(counts, type), name: type, bytes: end - start, start, end });
+  const { ok } = walkPngChunks(bytes, view, (type, start, end) => {
+    if (PNG_STRIP_CHUNK_TYPES.has(type)) {
+      segments.push({ id: nextId(counts, type), name: type, bytes: end - start, start, end, payloadStart: start + 8 });
+    }
   });
   return {
     format: "png",
-    segments,
-    totalBytes: segments.reduce((sum, s) => sum + s.bytes, 0),
-    strippable: true,
+    segments: ok ? segments : [],
+    totalBytes: ok ? segments.reduce((sum, s) => sum + s.bytes, 0) : 0,
+    strippable: ok,
   };
 }
 
@@ -223,7 +315,7 @@ function stripPngMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): Arr
   const view = new DataView(buf);
   const chunks: Uint8Array[] = [bytes.subarray(0, 8)]; // シグネチャ
   const counts = new Map<string, number>();
-  walkPngChunks(bytes, view, (type, start, end) => {
+  const { ok } = walkPngChunks(bytes, view, (type, start, end) => {
     if (!PNG_STRIP_CHUNK_TYPES.has(type)) {
       chunks.push(bytes.subarray(start, end));
       return;
@@ -231,6 +323,7 @@ function stripPngMetadata(buf: ArrayBuffer, removeIds: ReadonlySet<string>): Arr
     const id = nextId(counts, type);
     if (!removeIds.has(id)) chunks.push(bytes.subarray(start, end));
   });
+  if (!ok) return buf; // 構造的に壊れているときは原本をそのまま返す（呼び出し側は scan.strippable === false で判定済み）
   return concatUint8Arrays(chunks);
 }
 
@@ -306,7 +399,7 @@ function scanWebpMetadata(buf: ArrayBuffer): MetadataScanResult {
     const paddedSize = size + (size % 2);
     const chunkEnd = offset + 8 + paddedSize;
     const name = WEBP_METADATA_CHUNKS[fourCc];
-    if (name) segments.push({ id: nextId(counts, name), name, bytes: 8 + paddedSize, start: offset, end: chunkEnd });
+    if (name) segments.push({ id: nextId(counts, name), name, bytes: 8 + paddedSize, start: offset, end: chunkEnd, payloadStart: offset + 8 });
     offset = chunkEnd;
   }
   return {
@@ -373,7 +466,8 @@ const SEGMENT_DESCRIPTIONS: Record<string, string> = {
   "APP1 XMP": "Adobe 系の編集情報・タグ（XML）",
   "APP1": "未分類の付随データ",
   "APP2 ICC_PROFILE": "カラープロファイル（色の基準。消すと色味が変わることがあります）",
-  "APP2": "未分類の付随データ",
+  "APP2": "APP2（不明。MPO の索引などを含むことがある）",
+  "APP2 MPF": "APP2 MPF（マルチピクチャ索引）",
   "APP13 Photoshop": "Photoshop の付随データ（IPTC キャプション等）",
   COM: "コメント文字列",
   eXIf: "撮影情報（機種・日時・向き・GPS など）",
@@ -471,14 +565,14 @@ function previewPngIccp(bytes: Uint8Array, segment: MetadataSegment): string | n
 
 /** JPEG COM: コメント文字列そのもの */
 function previewJpegCom(bytes: Uint8Array, segment: MetadataSegment): string | null {
-  const data = bytes.subarray(segment.start + 4, segment.end); // マーカー(2) + 長さ(2) を読み飛ばす
+  const data = bytes.subarray(segment.payloadStart, segment.end);
   const text = bestEffortDecode(data);
   return text ? truncatePreview(text) : null;
 }
 
 /** JPEG APP1 XMP: XML はそのまま出さず、サイズと拾えた範囲で CreatorTool / dc:creator だけ添える */
 function previewJpegXmp(bytes: Uint8Array, segment: MetadataSegment): string {
-  const xmlStart = segment.start + 4 + XMP_APP1_HEADER.length; // マーカー(2)+長さ(2) + XMP 識別子(29)
+  const xmlStart = segment.payloadStart + XMP_APP1_HEADER.length;
   const xmlBytes = bytes.subarray(xmlStart, segment.end);
   const xml = bestEffortDecode(xmlBytes);
   const creatorTool = /CreatorTool[=>]"?([^"<]*)/.exec(xml)?.[1]?.trim();
@@ -539,7 +633,7 @@ function iccProfileDescription(bytes: Uint8Array, profileStart: number, profileE
 
 /** JPEG APP2 ICC_PROFILE: "ICC_PROFILE\0" + seqNo(1) + numMarkers(1) の後にプロファイル本体が続く */
 function previewJpegIcc(bytes: Uint8Array, segment: MetadataSegment): string | null {
-  const profileStart = segment.start + 4 + 12 + 2; // マーカー(2)+長さ(2) + "ICC_PROFILE\0"(12) + seqNo+numMarkers(2)
+  const profileStart = segment.payloadStart + ICC_APP2_HEADER.length + 2; // "ICC_PROFILE\0"(12) + seqNo+numMarkers(2)
   const desc = iccProfileDescription(bytes, profileStart, segment.end);
   return desc ? `プロファイル名: ${desc}` : null;
 }

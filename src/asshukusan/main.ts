@@ -1303,7 +1303,19 @@ function watchAvifComparison(result: PipelineResult): void {
     });
 }
 
-async function runPipelineOnce(): Promise<void> {
+// パラメータ変更のたびに増える世代カウンタ。debounce 中・実行中にさらに変更が来たら
+// 世代を進め、走行中の（もう古い）計算が終わっても結果を公開させない。「実行を1本に
+// 直列化する」pipelineRunning/rerunRequested だけでは、実行中に来た変更が「今動いている
+// 計算に間に合わなかった」ことを実行後まで知る術が無く、古いパラメータの結果が一瞬でも
+// 表示されうる（ダウンロードリンクが古いファイルを指す事故につながる）ため、これを判定に使う
+let pipelineGeneration = 0;
+
+/**
+ * 実行開始時点のパラメータで1回だけパイプラインを計算する。呼び出し側（runPipelineLoop）
+ * が実行開始時に固定した `generation` を渡し、完了時点でまだ最新であれば結果を公開する。
+ * 古くなっていれば公開せず rerunRequested を立て、直後の do-while が最新世代で回り直す。
+ */
+async function runPipelineOnce(generation: number): Promise<void> {
   const meta = state.meta;
   const image = state.image;
   const file = state.file;
@@ -1315,6 +1327,12 @@ async function runPipelineOnce(): Promise<void> {
   // await 中に画像が差し替えられていたら、古い meta に対する計算結果は捨てる
   if (state.meta !== meta) return;
 
+  // removeIds/exifEdits はミュータブルな Set/オブジェクトで、計算中にユーザーが
+  // チェックボックスや Exif 編集欄を操作すると同じ参照の中身が変わりうる。実行開始時点の
+  // 値をコピーして固定し、「走り始めた計算には走り始めた時点の設定だけを反映する」を保証する
+  const removeIds = new Set(state.removeIds);
+  const exifEdits = { ...state.exifEdits };
+
   try {
     const result = await runPipeline({
       file,
@@ -1324,11 +1342,16 @@ async function runPipelineOnce(): Promise<void> {
       quality: state.quality,
       longEdgeCap: state.longEdgeCap,
       formatChoice: state.formatChoice,
-      removeIds: state.removeIds,
-      exifEdits: state.exifEdits,
+      removeIds,
+      exifEdits,
       support,
     });
     if (state.meta !== meta) return;
+    if (generation !== pipelineGeneration) {
+      // 計算中により新しいパラメータが積まれていた。この結果は公開せず次の周回に譲る
+      rerunRequested = true;
+      return;
+    }
     state.pipeline = result;
     state.pipelineDirty = false;
     watchAvifComparison(result);
@@ -1342,6 +1365,11 @@ async function runPipelineOnce(): Promise<void> {
       invalidateFormatComparisonCache();
       if (state.formatChoice === "avif") state.formatChoice = "original";
       // 選択を戻した場合は state.pipeline を古いままにせず、新しい選択で計算し直す
+      rerunRequested = true;
+      return;
+    }
+    if (generation !== pipelineGeneration) {
+      // 失敗した結果すら、もう古い世代のものなら状態を書き換えない（最新世代の結果を待つ）
       rerunRequested = true;
       return;
     }
@@ -1364,7 +1392,8 @@ async function runPipelineLoop(): Promise<void> {
   try {
     do {
       rerunRequested = false;
-      await runPipelineOnce();
+      const generation = pipelineGeneration;
+      await runPipelineOnce(generation);
     } while (rerunRequested);
   } finally {
     pipelineRunning = false;
@@ -1380,7 +1409,9 @@ let debounceHandle: ReturnType<typeof setTimeout> | undefined;
 
 function scheduleRecompute(): void {
   // 実際の再計算は debounce 後だが、パラメータが変わった時点でダウンロードは即座に
-  // 無効化する（見た目のちらつきより「押したら古いファイルが降ってくる」方が事故が大きい）
+  // 無効化する（見た目のちらつきより「押したら古いファイルが降ってくる」方が事故が大きい）。
+  // 世代も同時に進め、いま走っている（もう古い）計算がこの後で終わっても公開されないようにする
+  pipelineGeneration++;
   state.pipelineDirty = true;
   syncDownloadLinks();
   if (debounceHandle !== undefined) clearTimeout(debounceHandle);
@@ -1393,19 +1424,29 @@ function scheduleRecompute(): void {
 // ドラッグ&ドロップ・貼り付け・input change・サンプル生成のいずれも handleFileSelected を
 // 経由する。連投（複数ファイルを続けて選ぶ、貼り付け直後にもう1枚 drop する等）されたときに
 // 遅い方の await が先に完了した選択を上書きしてしまわないよう、世代カウンタで判定する。
+// 世代は「取り込みが始まった瞬間」に進める。MIME 不正で弾く場合も含めて必ず進めることで、
+// 直前に走っていた（まだ有効な）読み込みが後から来たこの取り込みに気づいて自分を古いと
+// 判定できるようにする（無効なファイルを選んだせいで、その前の有効な読み込みと状態が
+// 二重に競合するのを防ぐ）。
 
 let loadGeneration = 0;
 
-async function handleFileSelected(file: File): Promise<void> {
+/** 取り込み開始時点で世代を進めて払い出す。サンプル生成のように非同期の間を挟む
+ * 呼び出し元は、この時点のトークンを保持して後から handleFileSelected へ渡す */
+function nextLoadGeneration(): number {
+  loadGeneration++;
+  return loadGeneration;
+}
+
+async function handleFileSelected(file: File, generation: number = nextLoadGeneration()): Promise<void> {
+  const myGeneration = generation;
+  const isStale = (): boolean => myGeneration !== loadGeneration;
+
   if (!file.type.startsWith("image/")) {
     showError("画像ファイルを選択してください。");
     return;
   }
   clearError();
-
-  loadGeneration++;
-  const myGeneration = loadGeneration;
-  const isStale = (): boolean => myGeneration !== loadGeneration;
 
   const objectUrl = URL.createObjectURL(file);
   try {
@@ -1431,16 +1472,23 @@ async function handleFileSelected(file: File): Promise<void> {
     }
     state.support = support;
 
-    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-    revokeOutputObjectUrl();
-
     // メタデータのセグメント一覧・Exif タグは画像ごとに固定なので、パイプラインとは独立に
     // ここで一度だけ求める（メタデータカードのコントロール DOM を組み立てる元データ）。
-    // JPEG の APP1 Exif・PNG の eXIf チャンクのどちらも extractExifPayload が同じ形の payload に揃えて返す
+    // JPEG の APP1 Exif・PNG の eXIf チャンクのどちらも extractExifPayload が同じ形の payload に揃えて返す。
+    //
+    // 新しい画像の派生データ（meta/originalArrayBuffer/support に加えてこれら）が揃うまでは、
+    // 旧オブジェクト URL をまだ破棄しない。ここより前で例外が起きても旧 state はそのまま
+    // 有効なままにし、「旧 URL は破棄済みだが state はまだ旧画像のまま」という中間状態を
+    // 作らないため（そうなると旧画像のサムネイル等が壊れた URL を指すことになる）
     const metadataScan = scanMetadata(originalArrayBuffer, meta.sniffedFormat);
     const exifPayload = extractExifPayload(originalArrayBuffer, meta.sniffedFormat, metadataScan);
     const exifStructure = exifPayload ? parseExifStructure(exifPayload) : null;
     const exifTags = exifPayload && exifStructure ? readExifTags(exifPayload, exifStructure) : null;
+
+    // ここまでで新しい画像の派生データが揃った。以降は旧オブジェクト URL の破棄と
+    // state の入れ替えを同期的に一括で行う
+    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    revokeOutputObjectUrl();
 
     state.file = file;
     state.objectUrl = objectUrl;
@@ -1457,6 +1505,8 @@ async function handleFileSelected(file: File): Promise<void> {
     state.activeStage = "original";
     state.pipeline = null;
     state.pipelineDirty = true;
+    // 新しい画像の読み込みは常に最新世代として扱う（この後すぐ runPipelineLoop を直接呼ぶため）
+    pipelineGeneration++;
     state.avifComparisonPending = false;
     state.sizeLadderCache = new Map();
     state.sizeLadderRows = null;
@@ -1523,10 +1573,15 @@ document.addEventListener("paste", (event) => {
 });
 
 sampleButtonEl.addEventListener("click", () => {
+  // generateSampleFile() 自体が非同期（canvas エンコード）のため、世代はクリックした
+  // この瞬間（取り込みの開始）に確保し、生成が終わってから handleFileSelected へ渡す。
+  // ここで確保しないと、生成中に別のファイルが先に読み込まれても世代が追いつかず、
+  // 後から出来上がったサンプル画像がそれを上書きしてしまう
+  const generation = nextLoadGeneration();
   sampleButtonEl.disabled = true;
   sampleButtonEl.textContent = "生成中…";
   generateSampleFile()
-    .then((file) => handleFileSelected(file))
+    .then((file) => handleFileSelected(file, generation))
     .catch((error: unknown) => {
       console.error(error);
       showError("サンプル画像の生成に失敗しました。");

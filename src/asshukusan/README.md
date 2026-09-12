@@ -91,7 +91,7 @@ WebP は EXIF / XMP / ICCP チャンクを読み飛ばすだけでは済まな�
 
 ### pixel 処理（リサイズ + 再エンコード）を worker に逃がす理由
 
-`encodeImage`（canvas への drawImage・toBlob、AVIF の wasm エンコード）はどれも大きな画像では数百ms〜数秒かかり、メインスレッドで実行するとその間ページ全体が固まる。`encode.worker.ts` に module worker を1体だけ遅延生成し、`OffscreenCanvas` 上で描画・エンコードまで完結させることで、UI（ノードのクリック・スライダー操作）を触れる状態に保ったまま処理する。パイプラインの各段は直列に呼ばれる設計（サイズ段 → フォーマット比較表も1件ずつ await する。上記「逐次エンコード」参照）で、複数の encode リクエストが同時に飛ぶことはないため、worker は1体で足りる。リクエストごとに作り直す・複数体持つ利点がなく、生成コストと（AVIF を選んだ場合の）wasm の二重ロードを避けられる。メインスレッドは `createImageBitmap(img)` でビットマップを作り、Transferable として worker へ move するだけに留め、画素データのコピーは発生させない。`OffscreenCanvas`/`Worker` が使えない環境（古い Safari 等）だけ `encodeImageMainThread`（`encode.ts`）にフォールバックし、メインスレッドで完結させる。メタデータ段（バイト列の読み飛ばし・再挿入）は画像全体のデコード・エンコードを伴わない軽い処理のため、worker へは移さずメインスレッドに残した。書き出し対応 probe（`detectFormatSupport`）も 1×1 canvas の軽い処理のままメインスレッドに残している。
+`encodeImage`（canvas への drawImage・toBlob、AVIF の wasm エンコード）はどれも大きな画像では数百ms〜数秒かかり、メインスレッドで実行するとその間ページ全体が固まる。`encode.worker.ts` に module worker を1体だけ遅延生成し、`OffscreenCanvas` 上で描画・エンコードまで完結させることで、UI（ノードのクリック・スライダー操作）を触れる状態に保ったまま処理する。worker 内の実処理は 1 件ずつだが、呼び出し要求は重なりうる。AVIF はキューで最新へ合流する（品質スライダーのドラッグ中などに積み上がった AVIF リクエストは `pipeline.ts` の `scheduleAvifEncode` が「実行中は1本、その間に来た分は最新の1件だけ」に間引いてから worker へ渡す。他形式は各段が直列に await する設計のため実質的に1件ずつしか飛ばない）。リクエストごとに worker を作り直す・複数体持つ利点がなく、生成コストと（AVIF を選んだ場合の）wasm の二重ロードを避けられる。メインスレッドは `createImageBitmap(img)` でビットマップを作り、Transferable として worker へ move するだけに留め、画素データのコピーは発生させない。`OffscreenCanvas`/`Worker`/`createImageBitmap` が使えない環境（古い Safari 等）だけ `encodeImageMainThread`（`encode.ts`）にフォールバックし、メインスレッドで完結させる。メタデータ段（バイト列の読み飛ばし・再挿入）は画像全体のデコード・エンコードを伴わない軽い処理のため、worker へは移さずメインスレッドに残した。書き出し対応 probe（`detectFormatSupport`）も 1×1 canvas の軽い処理のままメインスレッドに残している。
 
 ### 検品時のヘッダー読み取りをまとめて 64 KiB にしている理由
 

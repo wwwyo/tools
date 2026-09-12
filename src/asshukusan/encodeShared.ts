@@ -79,14 +79,23 @@ export function resetAvifEncoder(): void {
   avifModulePromise = null;
 }
 
-/** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
+/**
+ * quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす。
+ *
+ * `UnsupportedFormatError` にするのは wasm の import・初期化に失敗した場合だけに限定する
+ * （呼び出し側はこれを「このセッションでは AVIF が丸ごと使えない」判定に使い、モジュールを
+ * 作り直させ、AVIF を比較表から外す）。モジュール自体は生きていて `encode()` 呼び出しだけが
+ * 失敗した場合（大きすぎる画像での OOM 等）は普通の Error のまま投げる。ここを混同すると、
+ * たまたま重い1枚のエンコードが失敗しただけで以後ずっと AVIF が選べなくなってしまう。
+ */
 export async function encodeAvif(imageData: ImageData, quality: number): Promise<Blob> {
+  let encode: (typeof import("@jsquash/avif"))["encode"];
   try {
-    const { encode } = await loadAvifEncoder();
-    const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
-    return new Blob([buf], { type: FORMAT_MIME.avif });
+    ({ encode } = await loadAvifEncoder());
   } catch (error) {
     resetAvifEncoder();
-    throw new UnsupportedFormatError(error instanceof Error ? error.message : "AVIF の書き出しに失敗しました");
+    throw new UnsupportedFormatError(error instanceof Error ? error.message : "AVIF エンコーダの読み込みに失敗しました");
   }
+  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
+  return new Blob([buf], { type: FORMAT_MIME.avif });
 }

@@ -17,6 +17,11 @@ function isInBounds(totalLength: number, start: number, length: number): boolean
   return Number.isFinite(start) && Number.isFinite(length) && start >= 0 && length >= 0 && start + length <= totalLength;
 }
 
+/** 半開区間 [start, end) 同士が重なるかを見る（IFD テーブル領域とポインタ先の衝突検出に使う） */
+function rangesOverlap(a: [number, number], b: [number, number]): boolean {
+  return a[0] < b[1] && b[0] < a[1];
+}
+
 const TIFF_TYPE_SIZE: Record<number, number> = {
   1: 1, // BYTE
   2: 1, // ASCII
@@ -121,29 +126,42 @@ export function parseExifStructure(payload: Uint8Array): ExifStructure | null {
     let gpsIfdOffset: number | null = null;
     let gpsInfoEntry: ExifIfdEntry | null = null;
 
+    // IFD0 自身のテーブル領域（エントリ列 + next IFD ポインタの 4 byte）。ExifIFD/GPSIFD の
+    // ポインタが指す先がここや TIFF ヘッダーへ重なっている（=改ざん・破損でポインタが
+    // 自己参照している）場合は、素直に追わずその IFD を「無い」ものとして扱う
+    const ifd0Range: [number, number] = [ifd0Offset, ifd0Offset + 2 + ifd0.length * 12 + 4];
+    const tiffHeaderRange: [number, number] = [tiffStart, tiffStart + 8];
+    const pointsIntoParsedStructure = (offset: number): boolean =>
+      rangesOverlap(tiffHeaderRange, [offset, offset + 1]) || rangesOverlap(ifd0Range, [offset, offset + 1]);
+
     // Exif IFD / GPS IFD はそれぞれ独立に試す。片方のポインタが壊れていても
     // （破損ファイル・改ざん等）、もう片方や IFD0 自体は読み取れるようにするため、
-    // ここでの失敗は該当 IFD だけを「無い」ものとして扱い、外側の try へは伝播させない
+    // ここでの失敗は該当 IFD だけを「無い」ものとして扱い、外側の try へは伝播させない。
+    // ポインタは LONG（type 4）・count 1 のときだけ追う。それ以外は仕様外の形なので信用しない
     const exifPointer = findEntry(ifd0, TAG_EXIF_IFD_POINTER);
-    if (exifPointer) {
+    if (exifPointer && exifPointer.type === 4 && exifPointer.count === 1) {
       try {
         const rel = view.getUint32(exifPointer.entryOffset + 8, little);
         const offset = tiffStart + rel;
-        exifIfd = readIfd(view, little, offset);
-        exifIfdOffset = offset;
+        if (!pointsIntoParsedStructure(offset)) {
+          exifIfd = readIfd(view, little, offset);
+          exifIfdOffset = offset;
+        }
       } catch {
         exifIfd = null;
         exifIfdOffset = null;
       }
     }
     const gpsPointer = findEntry(ifd0, TAG_GPS_INFO_POINTER);
-    if (gpsPointer) {
+    if (gpsPointer && gpsPointer.type === 4 && gpsPointer.count === 1) {
       try {
         const rel = view.getUint32(gpsPointer.entryOffset + 8, little);
         const offset = tiffStart + rel;
-        gpsIfd = readIfd(view, little, offset);
-        gpsIfdOffset = offset;
-        gpsInfoEntry = gpsPointer;
+        if (!pointsIntoParsedStructure(offset)) {
+          gpsIfd = readIfd(view, little, offset);
+          gpsIfdOffset = offset;
+          gpsInfoEntry = gpsPointer;
+        }
       } catch {
         gpsIfd = null;
         gpsIfdOffset = null;
@@ -371,20 +389,52 @@ function writeAsciiInPlace(bytes: Uint8Array, view: DataView, little: boolean, t
  * 「座標値そのものをゼロで上書きする」+「IFD からたどり着けなくする」の二重で、
  * 標準的な Exif リーダーが GPS 情報を復元できないようにしている。
  */
+/** IFD（エントリ列 + next IFD ポインタ 4 byte）のテーブル領域を半開区間で返す */
+function ifdTableRange(offset: number, entryCount: number): [number, number] {
+  return [offset, offset + 2 + entryCount * 12 + 4];
+}
+
 function zeroOutGps(bytes: Uint8Array, view: DataView, little: boolean, tiffStart: number, structure: ExifStructure): void {
   if (!structure.gpsIfd || structure.gpsIfdOffset == null || !structure.gpsInfoEntry) return;
+
+  // 外部値がここ（TIFF ヘッダー・IFD0/ExifIFD/GPSIFD のテーブル領域）と重なっているなら、
+  // そこへゼロを書くと GPS 以外の構造を壊す。1件でも重なりがあれば GPS IFD の編集全体を
+  // 中止し、ファイルを無加工のまま返す（除去できなかった、として扱う）
+  const structuralRanges: [number, number][] = [
+    [tiffStart, tiffStart + 8],
+    ifdTableRange(structure.ifd0Offset, structure.ifd0.length),
+  ];
+  if (structure.exifIfdOffset != null && structure.exifIfd) {
+    structuralRanges.push(ifdTableRange(structure.exifIfdOffset, structure.exifIfd.length));
+  }
+  structuralRanges.push(ifdTableRange(structure.gpsIfdOffset, structure.gpsIfd.length));
+
   for (const entry of structure.gpsIfd) {
-    const typeSize = TIFF_TYPE_SIZE[entry.type] ?? 1;
+    const typeSize = TIFF_TYPE_SIZE[entry.type];
+    if (typeSize == null) continue; // 未知の type の値は外部オフセットの解釈自体が信用できないため見に行かない
     const valueBytes = typeSize * entry.count;
-    if (valueBytes > 4) {
-      const rel = view.getUint32(entry.entryOffset + 8, little);
-      const abs = tiffStart + rel;
-      // ゼロ埋めの範囲は検証済みのバイト範囲に限定する。壊れた count で
-      // バッファ外まで書きに行かないようにするため
-      if (isInBounds(bytes.length, abs, valueBytes)) {
-        for (let i = 0; i < valueBytes; i++) bytes[abs + i] = 0;
+    if (valueBytes <= 4) continue;
+    const rel = view.getUint32(entry.entryOffset + 8, little);
+    const abs = tiffStart + rel;
+    if (!isInBounds(bytes.length, abs, valueBytes)) continue; // 壊れた count はそもそも書き込み先が定まらない
+    if (structuralRanges.some((range) => rangesOverlap([abs, abs + valueBytes], range))) return;
+  }
+
+  for (const entry of structure.gpsIfd) {
+    // 型が既知（TIFF_TYPE_SIZE にある）のときだけ外部の値領域をゼロ埋めする（GPS zero-fill は既知の型限定）
+    const typeSize = TIFF_TYPE_SIZE[entry.type];
+    if (typeSize != null) {
+      const valueBytes = typeSize * entry.count;
+      if (valueBytes > 4) {
+        const rel = view.getUint32(entry.entryOffset + 8, little);
+        const abs = tiffStart + rel;
+        if (isInBounds(bytes.length, abs, valueBytes)) {
+          for (let i = 0; i < valueBytes; i++) bytes[abs + i] = 0;
+        }
       }
     }
+    // エントリ自身の value/offset フィールド（12 byte エントリ内、常に検証済み範囲）は
+    // 型を問わず消す。GPS IFD ごと辿れなくする（後段のポインタ id 書き換え）の一部のため
     if (isInBounds(bytes.length, entry.entryOffset + 8, 4)) {
       for (let i = 0; i < 4; i++) bytes[entry.entryOffset + 8 + i] = 0;
     }

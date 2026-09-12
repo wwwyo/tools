@@ -424,10 +424,9 @@ function buildEditedOriginalBuffer(originalArrayBuffer: ArrayBuffer, scan: Metad
     const copy = originalArrayBuffer.slice(0);
     const bytes = new Uint8Array(copy);
     for (const seg of jpegExifSegs) {
-      const payloadStart = seg.start + 4; // マーカー(2) + 長さ(2) を読み飛ばす
-      const payload = bytes.subarray(payloadStart, seg.end);
+      const payload = bytes.subarray(seg.payloadStart, seg.end);
       const edited = applyExifEdits(payload, edits);
-      bytes.set(edited.subarray(0, payload.length), payloadStart);
+      bytes.set(edited.subarray(0, payload.length), seg.payloadStart);
     }
     return copy;
   }
@@ -806,9 +805,14 @@ export function buildSizeInfoHtml(meta: ImageMeta, detail: SizeStageDetail, afte
 }
 
 
-/** セグメント名から「除去」チェックボックスのデフォルト値を決める。ICC だけ既定で保持（色が変わるため） */
+/** 既定で保持する（除去チェックボックスを OFF にする）セグメント名。
+ * ICC は色空間の定義そのもの、未知の APP2 / MPF は正体不明・副画像索引という
+ * 「消してよいか判断できないもの」の代表であり、安全側に倒して保持を既定にする */
+const DEFAULT_KEEP_SEGMENT_NAMES = new Set(["APP2 ICC_PROFILE", "APP2", "APP2 MPF"]);
+
+/** セグメント名から「除去」チェックボックスのデフォルト値を決める */
 export function defaultRemoveForSegmentName(name: string): boolean {
-  return name !== "APP2 ICC_PROFILE";
+  return !DEFAULT_KEEP_SEGMENT_NAMES.has(name);
 }
 
 /** 除去できないメタデータ（scan.strippable === false の形式、例: WebP）で全チェックの初期値を決める際に使う */
@@ -846,6 +850,10 @@ export function buildMetadataSegmentRowsHtml(
         seg.name === "APP2 ICC_PROFILE"
           ? `<p class="pl-6 pb-1 text-xs text-muted-foreground">sRGB でない ICC プロファイルを除去すると色味が変わることがあります。</p>`
           : "";
+      const mpfNote =
+        seg.name === "APP2 MPF"
+          ? `<p class="pl-6 pb-1 text-xs text-muted-foreground">除去すると MPO の副画像（視差画像など）も一緒に失われます。</p>`
+          : "";
       const descriptionHtml = description
         ? `<p class="pl-6 text-xs text-muted-foreground">${escapeHtml(description)}</p>`
         : "";
@@ -857,7 +865,7 @@ export function buildMetadataSegmentRowsHtml(
         `<label class="flex items-center justify-between gap-3 text-sm">` +
         `<span class="flex items-center gap-1.5"><input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="font-semibold text-foreground">${escapeHtml(seg.name)}</span></span>` +
         `<span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>` +
-        `</label>${descriptionHtml}${contentHtml}${iccNote}` +
+        `</label>${descriptionHtml}${contentHtml}${iccNote}${mpfNote}` +
         `</div>`
       );
     })

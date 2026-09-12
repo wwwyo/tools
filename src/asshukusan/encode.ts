@@ -86,8 +86,11 @@ async function encodeImageMainThread(
 }
 
 // --- worker 経由のエンコード -------------------------------------------------
-// OffscreenCanvas と Worker が両方使える環境でだけ worker を使う
-const canUseWorker = typeof OffscreenCanvas !== "undefined" && typeof Worker !== "undefined";
+// OffscreenCanvas と Worker、そして worker へ転送する ImageBitmap を作る createImageBitmap の
+// 3つが揃っている環境でだけ worker を使う。createImageBitmap が無ければビットマップ自体を
+// 作れず worker へ何も送れないため、他の2つと同格の前提条件として扱う
+const canUseWorker =
+  typeof OffscreenCanvas !== "undefined" && typeof Worker !== "undefined" && typeof createImageBitmap === "function";
 
 type WorkerResponse =
   | { id: number; blob: Blob; width: number; height: number }
@@ -123,6 +126,14 @@ function getEncodeWorker(): Worker {
         // 繰り返すだけになる。次回の呼び出しで作り直せるよう、ここで明示的に捨てる
         w.terminate();
         if (encodeWorker === w) encodeWorker = null;
+        // worker は1体しか無く、terminate 後は他の保留中リクエストにも二度と応答が来ない。
+        // 上の reject は id 一致分だけなので、同じ worker に積まれていた残り全件もここで
+        // reject しないと、呼び出し元（main.ts の pipelineRunning/computing 判定を含む）が
+        // 永遠に待ち続けてしまう
+        for (const [id, pending] of pendingEncodes) {
+          pending.reject(new UnsupportedFormatError(data.error));
+          pendingEncodes.delete(id);
+        }
       }
     } else {
       task.resolve({ blob: data.blob, width: data.width, height: data.height });
@@ -152,7 +163,15 @@ async function encodeImageViaWorker(
   // worker へ転送するだけなので画素コピーは発生しない（Transferable として move される）。
   // imageOrientation の既定値はブラウザで異なり（Safari は Exif の向きを適用しない）、
   // <img> を drawImage するメインスレッド経路と結果がずれるので明示する
-  const bitmap = await createImageBitmap(img, { imageOrientation: "from-image" });
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(img, { imageOrientation: "from-image" });
+  } catch (error) {
+    // デコード失敗等で reject されることがある。worker インフラ自体は無事なので、
+    // この呼び出しに限りメインスレッド経路にフォールバックする
+    console.error(error);
+    return encodeImageMainThread(img, opts);
+  }
 
   let w: Worker;
   try {
