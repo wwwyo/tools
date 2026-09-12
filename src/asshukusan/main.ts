@@ -1,7 +1,7 @@
 import "../global.css";
 import "./styles.css";
 import { extractMetadata, formatBytes, loadImage, type ImageMeta } from "./imageMeta";
-import { detectFormatSupport, generateSampleFile, type ProbedFormat } from "./encode";
+import { detectFormatSupport, generateSampleFile, UnsupportedFormatError, type ProbedFormat } from "./encode";
 import { scanMetadata, type MetadataScanResult } from "./metadataStrip";
 import { extractExifPayload, parseExifStructure, readExifTags, type ExifEdits, type ExifTags } from "./exif";
 import {
@@ -19,6 +19,7 @@ import {
   metadataSummaryLines,
   defaultRemoveIds,
   buildOutputInfoHtml,
+  FORMAT_LABELS,
   type FormatChoice,
   type FormatComparisonRow,
   type PipelineResult,
@@ -126,6 +127,8 @@ const EDGE_MAX_STROKE = 8;
 
 interface BaseNodeEls {
   rootEl: HTMLDivElement;
+  /** ヘッダー+本文をまとめた、実際に role="button" を持つ操作対象（フォーカス・キー操作はここが受ける） */
+  buttonEl: HTMLDivElement;
   headerEl: HTMLDivElement;
   inputPortEl: HTMLDivElement | null;
   outputPortEl: HTMLDivElement | null;
@@ -191,6 +194,8 @@ interface AppState {
   computing: boolean;
   /** フォーマット比較表の AVIF 行がまだ wasm エンコード中かどうか（フォーマットノードの表示に使う） */
   avifComparisonPending: boolean;
+  /** パラメータ変更〜再計算完了までの間 true。ダウンロードリンクは古い結果を配らないようこの間だけ無効化する */
+  pipelineDirty: boolean;
   outputObjectUrl: string | null;
   nodeEls: NodeElsMap;
   edgeEls: EdgeEls[];
@@ -218,6 +223,7 @@ const state: AppState = {
   support: null,
   computing: false,
   avifComparisonPending: false,
+  pipelineDirty: false,
   outputObjectUrl: null,
   nodeEls: {},
   edgeEls: [],
@@ -394,10 +400,12 @@ function buildMetadataControls(
       (dateTimeHintEl as HTMLParagraphElement).classList.toggle("hidden", valid || value.length === 0);
       if (valid) {
         state.exifEdits.dateTime = value;
-        scheduleRecompute();
       } else {
         delete state.exifEdits.dateTime;
       }
+      // 空欄・不正値へ変えたときも「編集を無かったことにする」という状態変化なので、
+      // 再計算しないと直前の値を書き込んだままの結果が残ってしまう
+      scheduleRecompute();
     });
 
     dateTimeOriginalInputEl = exifSection.querySelector("#datetime-original-input") as HTMLInputElement;
@@ -409,10 +417,10 @@ function buildMetadataControls(
       (dateTimeOriginalHintEl as HTMLParagraphElement).classList.toggle("hidden", valid || value.length === 0);
       if (valid) {
         state.exifEdits.dateTimeOriginal = value;
-        scheduleRecompute();
       } else {
         delete state.exifEdits.dateTimeOriginal;
       }
+      scheduleRecompute();
     });
 
     gpsCheckboxEl = exifSection.querySelector("#gps-remove") as HTMLInputElement;
@@ -482,13 +490,17 @@ function attachRowGroupHandlers(containerEl: HTMLElement, onSelect: (value: stri
     onSelect(btn.dataset.value ?? "");
   });
   containerEl.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    // ↑/↓ に加えて ←/→ でも移動できるようにする（W3C の radiogroup パターンに合わせる）。
+    // 端に達したら反対側へ折り返す（Home/End の代わりに一周する動線にしている）
+    const isForward = event.key === "ArrowDown" || event.key === "ArrowRight";
+    const isBackward = event.key === "ArrowUp" || event.key === "ArrowLeft";
+    if (!isForward && !isBackward) return;
     const target = event.target;
     if (!(target instanceof HTMLButtonElement) || !target.classList.contains("asshukusan-bar-row")) return;
     const rows = Array.from(containerEl.querySelectorAll<HTMLButtonElement>(".asshukusan-bar-row:not([disabled])"));
     const currentIndex = rows.indexOf(target);
-    if (currentIndex === -1) return;
-    const nextIndex = event.key === "ArrowDown" ? Math.min(rows.length - 1, currentIndex + 1) : Math.max(0, currentIndex - 1);
+    if (currentIndex === -1 || rows.length === 0) return;
+    const nextIndex = (currentIndex + (isForward ? 1 : -1) + rows.length) % rows.length;
     const next = rows[nextIndex];
     if (!next || next === target) return;
     event.preventDefault();
@@ -664,18 +676,26 @@ function createPort(side: "left" | "right"): HTMLDivElement {
   return portEl;
 }
 
-/** ノード共通の外枠（ヘッダー・ポート・選択操作）を組み立て、body 要素だけ呼び出し側に渡す */
-function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElement; headerEl: HTMLDivElement; bodyEl: HTMLDivElement; inputPortEl: HTMLDivElement | null; outputPortEl: HTMLDivElement | null } {
+/**
+ * ノード共通の外枠（ヘッダー・ポート・選択操作）を組み立て、body 要素だけ呼び出し側に渡す。
+ *
+ * role="button" はヘッダー+本文をまとめた内側の `buttonEl` に持たせ、`rootEl` 自体には
+ * 付けない。出力ノードだけは `rootEl` の直下（`buttonEl` の外）にダウンロード用の `<a>` を
+ * 追加で持つため、`<a>` が role="button" の中に入れ子にならないようにするための構造。
+ */
+function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElement; buttonEl: HTMLDivElement; headerEl: HTMLDivElement; bodyEl: HTMLDivElement; inputPortEl: HTMLDivElement | null; outputPortEl: HTMLDivElement | null } {
   const rootEl = document.createElement("div");
   rootEl.id = `asshukusan-node-${stageId}`;
-  rootEl.className =
-    "asshukusan-node absolute flex flex-col overflow-hidden rounded border border-border bg-card shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring";
+  rootEl.className = "asshukusan-node absolute flex flex-col overflow-hidden rounded border border-border bg-card shadow-sm transition-colors";
   rootEl.style.width = `${NODE_WIDTH}px`;
   rootEl.style.setProperty("--row-index", String(index));
-  rootEl.setAttribute("role", "button");
-  rootEl.setAttribute("aria-controls", "detail-panel");
-  rootEl.setAttribute("aria-pressed", "false");
-  rootEl.tabIndex = -1;
+
+  const buttonEl = document.createElement("div");
+  buttonEl.className = "flex flex-col focus-visible:outline-2 focus-visible:outline-ring";
+  buttonEl.setAttribute("role", "button");
+  buttonEl.setAttribute("aria-controls", "detail-panel");
+  buttonEl.setAttribute("aria-pressed", "false");
+  buttonEl.tabIndex = -1;
 
   const headerEl = document.createElement("div");
   headerEl.className = "asshukusan-node-header bg-muted px-2 py-1 text-xs font-semibold text-foreground";
@@ -684,26 +704,27 @@ function createNodeShell(stageId: StageId, index: number): { rootEl: HTMLDivElem
   const bodyEl = document.createElement("div");
   bodyEl.className = "flex flex-col gap-1.5 p-2 text-xs";
 
-  rootEl.append(headerEl, bodyEl);
+  buttonEl.append(headerEl, bodyEl);
+  rootEl.append(buttonEl);
 
   const inputPortEl = stageId === "original" ? null : createPort("left");
   const outputPortEl = stageId === "output" ? null : createPort("right");
   if (inputPortEl) rootEl.append(inputPortEl);
   if (outputPortEl) rootEl.append(outputPortEl);
 
-  rootEl.addEventListener("click", () => {
+  buttonEl.addEventListener("click", () => {
     setActiveStage(stageId);
-    rootEl.focus();
+    buttonEl.focus();
   });
-  rootEl.addEventListener("keydown", (event) => {
-    if (event.target !== rootEl) return;
+  buttonEl.addEventListener("keydown", (event) => {
+    if (event.target !== buttonEl) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       setActiveStage(stageId);
     }
   });
 
-  return { rootEl, headerEl, bodyEl, inputPortEl, outputPortEl };
+  return { rootEl, buttonEl, headerEl, bodyEl, inputPortEl, outputPortEl };
 }
 
 /**
@@ -758,7 +779,11 @@ function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boo
         const deltaEl = document.createElement("span");
         deltaEl.className = "font-mono font-semibold text-primary";
         const downloadButtonEl = createDownloadButton();
-        shell.bodyEl.append(bytesEl, deltaEl, downloadButtonEl);
+        downloadButtonEl.classList.add("mx-2", "mb-2");
+        shell.bodyEl.append(bytesEl, deltaEl);
+        // ダウンロードリンクは role="button" の buttonEl の外（rootEl 直下）に置く。
+        // インタラクティブ要素を role="button" の中へ入れ子にしないため
+        shell.rootEl.append(downloadButtonEl);
         state.nodeEls.output = { ...shell, bytesEl, deltaEl, downloadButtonEl };
         break;
       }
@@ -798,7 +823,7 @@ function buildPipelineNodes(_meta: ImageMeta, _support: Record<ProbedFormat, boo
 
 function handleCanvasKeydown(event: KeyboardEvent): void {
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-  if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("asshukusan-node")) return;
+  if (!(event.target instanceof HTMLElement) || event.target.getAttribute("role") !== "button") return;
   const currentIndex = STAGE_ORDER.indexOf(state.activeStage);
   const nextIndex =
     event.key === "ArrowRight"
@@ -808,7 +833,7 @@ function handleCanvasKeydown(event: KeyboardEvent): void {
   if (!nextStage || nextStage === state.activeStage) return;
   event.preventDefault();
   setActiveStage(nextStage);
-  state.nodeEls[nextStage]?.rootEl.focus();
+  state.nodeEls[nextStage]?.buttonEl.focus();
 }
 
 /** ノードの選択状態（ヘッダー配色・枠線・roving tabindex）を切り替え、詳細パネルを描画し直す */
@@ -818,8 +843,8 @@ function setActiveStage(stageId: StageId): void {
     const els = state.nodeEls[id];
     if (!els) continue;
     const active = id === stageId;
-    els.rootEl.setAttribute("aria-pressed", String(active));
-    els.rootEl.tabIndex = active ? 0 : -1;
+    els.buttonEl.setAttribute("aria-pressed", String(active));
+    els.buttonEl.tabIndex = active ? 0 : -1;
     els.rootEl.classList.toggle("border-primary", active);
     els.rootEl.classList.toggle("shadow", active);
     els.headerEl.classList.toggle("bg-primary", active);
@@ -1004,12 +1029,17 @@ function syncDownloadLinks(): void {
   const anchors = [state.nodeEls.output?.downloadButtonEl, outputDetailEls.downloadButtonEl].filter(
     (el): el is HTMLAnchorElement => el != null,
   );
-  const enabled = pipeline != null && objectUrl != null && !state.computing;
+  // pipelineDirty の間（パラメータ変更〜再計算完了まで）は、まだ今のパラメータを反映していない
+  // 古い blob を配ってしまわないよう無効化する
+  const enabled = pipeline != null && objectUrl != null && !state.computing && !state.pipelineDirty;
   for (const el of anchors) {
     el.classList.toggle("pointer-events-none", !enabled);
     el.classList.toggle("opacity-50", !enabled);
     if (!enabled || !pipeline || !objectUrl) {
       el.setAttribute("aria-disabled", "true");
+      // href/download が残っていると、aria-disabled でも Enter キー操作でリンクをたどれてしまう
+      el.removeAttribute("href");
+      el.removeAttribute("download");
       continue;
     }
     el.removeAttribute("aria-disabled");
@@ -1255,7 +1285,21 @@ function watchAvifComparison(result: PipelineResult): void {
       console.error(error);
       if (state.pipeline !== result) return;
       state.avifComparisonPending = false;
+      if (error instanceof UnsupportedFormatError) {
+        // wasm の初期化・エンコードが実際に失敗した。以後は AVIF を「このブラウザでは書き出し不可」
+        // として比較表から外し、選択中だったら「元のまま」に戻して再計算する
+        if (state.support) state.support = { ...state.support, avif: false };
+        const comparison = result.format.detail.comparison;
+        const index = comparison.findIndex((r) => r.format === "avif");
+        if (index !== -1) comparison[index] = { format: "avif", label: FORMAT_LABELS.avif, supported: false, bytes: null, delta: null };
+        invalidateFormatComparisonCache();
+        if (state.formatChoice === "avif") {
+          state.formatChoice = "original";
+          scheduleRecompute();
+        }
+      }
       renderNodes();
+      if (state.activeStage === "format") renderDetailPanel();
     });
 }
 
@@ -1286,9 +1330,25 @@ async function runPipelineOnce(): Promise<void> {
     });
     if (state.meta !== meta) return;
     state.pipeline = result;
+    state.pipelineDirty = false;
     watchAvifComparison(result);
   } catch (error) {
+    if (state.meta !== meta) return;
     console.error(error);
+    if (error instanceof UnsupportedFormatError) {
+      // このブラウザ・セッションでは AVIF の wasm エンコードが動かないと判明した。
+      // 以後のフォーマット比較表からは AVIF を外し、選択中だった場合は「元のまま」に戻す
+      if (state.support) state.support = { ...state.support, avif: false };
+      invalidateFormatComparisonCache();
+      if (state.formatChoice === "avif") state.formatChoice = "original";
+      // 選択を戻した場合は state.pipeline を古いままにせず、新しい選択で計算し直す
+      rerunRequested = true;
+      return;
+    }
+    // 失敗した結果を古いパイプラインのまま出し続けるとダウンロードが古いファイルを配ってしまうため、
+    // 出力を明示的に空にしてからエラーを出す
+    state.pipeline = null;
+    revokeOutputObjectUrl();
     showError("画像の変換に失敗しました。別の画像やパラメータで試してください。");
   }
 }
@@ -1319,6 +1379,10 @@ const DEBOUNCE_MS = 150;
 let debounceHandle: ReturnType<typeof setTimeout> | undefined;
 
 function scheduleRecompute(): void {
+  // 実際の再計算は debounce 後だが、パラメータが変わった時点でダウンロードは即座に
+  // 無効化する（見た目のちらつきより「押したら古いファイルが降ってくる」方が事故が大きい）
+  state.pipelineDirty = true;
+  syncDownloadLinks();
   if (debounceHandle !== undefined) clearTimeout(debounceHandle);
   debounceHandle = setTimeout(() => {
     runPipelineLoop().catch((error: unknown) => console.error(error));
@@ -1326,6 +1390,11 @@ function scheduleRecompute(): void {
 }
 
 // --- ファイル読み込み ---------------------------------------------------------
+// ドラッグ&ドロップ・貼り付け・input change・サンプル生成のいずれも handleFileSelected を
+// 経由する。連投（複数ファイルを続けて選ぶ、貼り付け直後にもう1枚 drop する等）されたときに
+// 遅い方の await が先に完了した選択を上書きしてしまわないよう、世代カウンタで判定する。
+
+let loadGeneration = 0;
 
 async function handleFileSelected(file: File): Promise<void> {
   if (!file.type.startsWith("image/")) {
@@ -1334,12 +1403,32 @@ async function handleFileSelected(file: File): Promise<void> {
   }
   clearError();
 
+  loadGeneration++;
+  const myGeneration = loadGeneration;
+  const isStale = (): boolean => myGeneration !== loadGeneration;
+
   const objectUrl = URL.createObjectURL(file);
   try {
     const image = await loadImage(objectUrl);
+    if (isStale()) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
     const meta = await extractMetadata(file, image);
+    if (isStale()) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
     const originalArrayBuffer = await file.arrayBuffer();
+    if (isStale()) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
     const support = state.support ?? (await supportPromise);
+    if (isStale()) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
     state.support = support;
 
     if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
@@ -1367,6 +1456,7 @@ async function handleFileSelected(file: File): Promise<void> {
     state.exifTags = exifTags;
     state.activeStage = "original";
     state.pipeline = null;
+    state.pipelineDirty = true;
     state.avifComparisonPending = false;
     state.sizeLadderCache = new Map();
     state.sizeLadderRows = null;
@@ -1387,8 +1477,9 @@ async function handleFileSelected(file: File): Promise<void> {
     renderNodes();
     runPipelineLoop().catch((error: unknown) => console.error(error));
   } catch (error) {
-    console.error(error);
     URL.revokeObjectURL(objectUrl);
+    if (isStale()) return;
+    console.error(error);
     showError("画像の読み込みに失敗しました。別の画像で試してください。");
   }
 }

@@ -9,7 +9,13 @@
  * 「セグメント境界だけ動かして中身は解釈しない」設計を崩さないため）。
  */
 
-import { pngChunkDataRange, type MetadataScanResult } from "./metadataStrip";
+import { asciiAt } from "./imageMeta";
+import { pngChunkDataRange, readNextJpegMarker, type MetadataScanResult } from "./metadataStrip";
+
+/** offset/count がバッファ範囲に収まっているかを検証する（overflow-safe: JS の数値演算に折り返しは無いため単純な加算比較で足りる） */
+function isInBounds(totalLength: number, start: number, length: number): boolean {
+  return Number.isFinite(start) && Number.isFinite(length) && start >= 0 && length >= 0 && start + length <= totalLength;
+}
 
 const TIFF_TYPE_SIZE: Record<number, number> = {
   1: 1, // BYTE
@@ -67,8 +73,11 @@ export interface ExifStructure {
   gpsInfoEntry: ExifIfdEntry | null;
 }
 
+/** IFD を読む。offset がバッファ範囲外、またはエントリがバッファ末尾へはみ出す場合は例外を投げる（呼び出し側が IFD 単位で捕まえる） */
 function readIfd(view: DataView, little: boolean, ifdAbsOffset: number): ExifIfdEntry[] {
+  if (!isInBounds(view.byteLength, ifdAbsOffset, 2)) throw new RangeError("IFD offset out of bounds");
   const count = view.getUint16(ifdAbsOffset, little);
+  if (!isInBounds(view.byteLength, ifdAbsOffset + 2, count * 12)) throw new RangeError("IFD entries out of bounds");
   const entries: ExifIfdEntry[] = [];
   for (let i = 0; i < count; i++) {
     const entryOffset = ifdAbsOffset + 2 + i * 12;
@@ -84,6 +93,12 @@ function readIfd(view: DataView, little: boolean, ifdAbsOffset: number): ExifIfd
 
 function findEntry(entries: ExifIfdEntry[], tag: number): ExifIfdEntry | undefined {
   return entries.find((e) => e.tag === tag);
+}
+
+/** タグだけでなく想定した TIFF 型と一致するエントリだけを返す。型が違う（=壊れている/想定外）タグは無いものとして扱う */
+function findTypedEntry(entries: ExifIfdEntry[], tag: number, expectedType: number): ExifIfdEntry | undefined {
+  const entry = findEntry(entries, tag);
+  return entry && entry.type === expectedType ? entry : undefined;
 }
 
 /** payload（"Exif\0\0" + TIFF データ）から IFD0 / Exif IFD / GPS IFD の位置を読む */
@@ -106,18 +121,34 @@ export function parseExifStructure(payload: Uint8Array): ExifStructure | null {
     let gpsIfdOffset: number | null = null;
     let gpsInfoEntry: ExifIfdEntry | null = null;
 
+    // Exif IFD / GPS IFD はそれぞれ独立に試す。片方のポインタが壊れていても
+    // （破損ファイル・改ざん等）、もう片方や IFD0 自体は読み取れるようにするため、
+    // ここでの失敗は該当 IFD だけを「無い」ものとして扱い、外側の try へは伝播させない
     const exifPointer = findEntry(ifd0, TAG_EXIF_IFD_POINTER);
     if (exifPointer) {
-      const rel = view.getUint32(exifPointer.entryOffset + 8, little);
-      exifIfdOffset = tiffStart + rel;
-      exifIfd = readIfd(view, little, exifIfdOffset);
+      try {
+        const rel = view.getUint32(exifPointer.entryOffset + 8, little);
+        const offset = tiffStart + rel;
+        exifIfd = readIfd(view, little, offset);
+        exifIfdOffset = offset;
+      } catch {
+        exifIfd = null;
+        exifIfdOffset = null;
+      }
     }
     const gpsPointer = findEntry(ifd0, TAG_GPS_INFO_POINTER);
     if (gpsPointer) {
-      gpsInfoEntry = gpsPointer;
-      const rel = view.getUint32(gpsPointer.entryOffset + 8, little);
-      gpsIfdOffset = tiffStart + rel;
-      gpsIfd = readIfd(view, little, gpsIfdOffset);
+      try {
+        const rel = view.getUint32(gpsPointer.entryOffset + 8, little);
+        const offset = tiffStart + rel;
+        gpsIfd = readIfd(view, little, offset);
+        gpsIfdOffset = offset;
+        gpsInfoEntry = gpsPointer;
+      } catch {
+        gpsIfd = null;
+        gpsIfdOffset = null;
+        gpsInfoEntry = null;
+      }
     }
 
     return { little, tiffStart, ifd0, ifd0Offset, exifIfd, exifIfdOffset, gpsIfd, gpsIfdOffset, gpsInfoEntry };
@@ -126,7 +157,8 @@ export function parseExifStructure(payload: Uint8Array): ExifStructure | null {
   }
 }
 
-function readAscii(payload: Uint8Array, view: DataView, little: boolean, tiffStart: number, entry: ExifIfdEntry): string {
+/** ASCII タグの値を読む。count がバッファ範囲をはみ出す（壊れている）場合は null を返し、タグ無しとして扱う */
+function readAscii(payload: Uint8Array, view: DataView, little: boolean, tiffStart: number, entry: ExifIfdEntry): string | null {
   const size = entry.count;
   let start: number;
   if (size <= 4) {
@@ -135,6 +167,7 @@ function readAscii(payload: Uint8Array, view: DataView, little: boolean, tiffSta
     const rel = view.getUint32(entry.entryOffset + 8, little);
     start = tiffStart + rel;
   }
+  if (!isInBounds(payload.length, start, size)) return null;
   let s = "";
   for (let i = 0; i < size; i++) {
     const b = payload[start + i] ?? 0;
@@ -154,6 +187,7 @@ function readRationalAt(view: DataView, little: boolean, abs: number): number {
   return den === 0 ? 0 : num / den;
 }
 
+/** GPS の緯度・経度（3 RATIONAL = deg/min/sec の 24 byte）を読む。範囲外・型不一致なら null（GPS 無しとして扱う） */
 function readGpsCoord(
   payload: Uint8Array,
   view: DataView,
@@ -163,8 +197,10 @@ function readGpsCoord(
   refEntry: ExifIfdEntry | undefined,
 ): number | null {
   if (!coordEntry || !refEntry) return null;
+  if (coordEntry.count < 3) return null; // deg/min/sec の3つの RATIONAL が必要
   const rel = view.getUint32(coordEntry.entryOffset + 8, little);
   const abs = tiffStart + rel;
+  if (!isInBounds(payload.length, abs, 24)) return null;
   const deg = readRationalAt(view, little, abs);
   const min = readRationalAt(view, little, abs + 8);
   const sec = readRationalAt(view, little, abs + 16);
@@ -195,15 +231,15 @@ export function readExifTags(payload: Uint8Array, structure: ExifStructure): Exi
   const { view, little, tiffStart } = viewOf(payload, structure);
   const ifd0 = structure.ifd0;
   const ascii = (tag: number): string | null => {
-    const e = findEntry(ifd0, tag);
+    const e = findTypedEntry(ifd0, tag, 2);
     return e ? readAscii(payload, view, little, tiffStart, e) : null;
   };
-  const orientationEntry = findEntry(ifd0, TAG_ORIENTATION);
-  const dateTimeOriginalEntry = structure.exifIfd ? findEntry(structure.exifIfd, TAG_DATETIME_ORIGINAL) : undefined;
-  const gpsLatEntry = structure.gpsIfd ? findEntry(structure.gpsIfd, TAG_GPS_LAT) : undefined;
-  const gpsLatRefEntry = structure.gpsIfd ? findEntry(structure.gpsIfd, TAG_GPS_LAT_REF) : undefined;
-  const gpsLonEntry = structure.gpsIfd ? findEntry(structure.gpsIfd, TAG_GPS_LON) : undefined;
-  const gpsLonRefEntry = structure.gpsIfd ? findEntry(structure.gpsIfd, TAG_GPS_LON_REF) : undefined;
+  const orientationEntry = findTypedEntry(ifd0, TAG_ORIENTATION, 3);
+  const dateTimeOriginalEntry = structure.exifIfd ? findTypedEntry(structure.exifIfd, TAG_DATETIME_ORIGINAL, 2) : undefined;
+  const gpsLatEntry = structure.gpsIfd ? findTypedEntry(structure.gpsIfd, TAG_GPS_LAT, 5) : undefined;
+  const gpsLatRefEntry = structure.gpsIfd ? findTypedEntry(structure.gpsIfd, TAG_GPS_LAT_REF, 2) : undefined;
+  const gpsLonEntry = structure.gpsIfd ? findTypedEntry(structure.gpsIfd, TAG_GPS_LON, 5) : undefined;
+  const gpsLonRefEntry = structure.gpsIfd ? findTypedEntry(structure.gpsIfd, TAG_GPS_LON_REF, 2) : undefined;
 
   return {
     make: ascii(TAG_MAKE),
@@ -229,27 +265,36 @@ function viewOf(payload: Uint8Array, structure: ExifStructure): { view: DataView
   };
 }
 
-/** JPEG ヘッダーバッファ（先頭 64KiB）から最初の APP1 Exif セグメントの payload を取り出す */
+/**
+ * JPEG バッファから最初の APP1 Exif セグメントの payload を取り出す。
+ * マーカー走査は metadataStrip.ts の `readNextJpegMarker` と同じ規則（0xFF fill byte を
+ * スキップする）を使い、`FF FF E1` を誤ってマーカー `0xFFFF` と読まないようにする。
+ */
 export function extractExifPayloadFromJpegHeader(buf: ArrayBuffer): Uint8Array | null {
   try {
     const view = new DataView(buf);
     const bytes = new Uint8Array(buf);
     if (view.getUint16(0) !== 0xffd8) return null;
     let offset = 2;
-    while (offset < buf.byteLength - 1) {
-      const marker = view.getUint16(offset);
-      if ((marker & 0xff00) !== 0xff00) break;
-      if (marker === 0xffd9 || marker === 0xffda) break;
+    while (offset < bytes.length) {
+      const info = readNextJpegMarker(bytes, offset);
+      if (!info) return null;
+      const { marker, headerStart } = info;
+      if (marker === 0xffd9 || marker === 0xffda) return null;
       if (marker >= 0xffd0 && marker <= 0xffd7) {
-        offset += 2;
+        offset = headerStart;
         continue;
       }
-      const length = view.getUint16(offset + 2);
-      const payloadStart = offset + 4;
-      if (marker === 0xffe1 && String.fromCharCode(...bytes.subarray(payloadStart, payloadStart + 5)) === "Exif\0") {
-        return bytes.subarray(payloadStart, offset + 2 + length);
+      if (headerStart + 2 > bytes.length) return null;
+      const length = view.getUint16(headerStart);
+      if (length < 2) return null;
+      const segEnd = headerStart + length;
+      if (segEnd > bytes.length) return null;
+      const payloadStart = headerStart + 2;
+      if (marker === 0xffe1 && isInBounds(bytes.length, payloadStart, 5) && asciiAt(bytes, payloadStart, 5) === "Exif\0") {
+        return bytes.subarray(payloadStart, segEnd);
       }
-      offset += 2 + length;
+      offset = segEnd;
     }
     return null;
   } catch {
@@ -267,7 +312,10 @@ export const EXIF_PAYLOAD_HEADER = new Uint8Array([0x45, 0x78, 0x69, 0x66, 0x00,
  */
 export function extractExifPayload(originalArrayBuffer: ArrayBuffer, sniffedFormat: string, scan: MetadataScanResult): Uint8Array | null {
   if (sniffedFormat === "JPEG") {
-    return extractExifPayloadFromJpegHeader(originalArrayBuffer.slice(0, 65536));
+    // 呼び出し側は既にファイル全体を ArrayBuffer で持っているため、ここで 64KiB に
+    // 再スライスする理由が無い。APP1 が 64KiB 境界付近にあると DataView が範囲外を読もうとして
+    // 例外になっていたため、常に完全なバッファをそのまま渡す
+    return extractExifPayloadFromJpegHeader(originalArrayBuffer);
   }
   if (sniffedFormat === "PNG") {
     const seg = scan.segments.find((s) => s.name === "eXIf");
@@ -305,10 +353,11 @@ export interface ExifEdits {
 const DATETIME_PATTERN = /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}$/;
 
 function writeAsciiInPlace(bytes: Uint8Array, view: DataView, little: boolean, tiffStart: number, entry: ExifIfdEntry, value: string): void {
-  // count は既存の固定長（NUL 込み）を超えられない。19 文字 + NUL = 20 byte ちょうどの
-  // DateTime 系タグにしか安全に書き込めないため、count が合わないときは書き込みをスキップする
-  if (!DATETIME_PATTERN.test(value) || entry.count < value.length + 1) return;
+  // ASCII 型以外・count が既存の固定長（NUL 込み）を超える場合は書き込まない。19 文字 + NUL = 20 byte
+  // ちょうどの DateTime 系タグにしか安全に書き込めないため、count が合わないときはスキップする
+  if (entry.type !== 2 || !DATETIME_PATTERN.test(value) || entry.count < value.length + 1) return;
   const start = entry.count <= 4 ? entry.entryOffset + 8 : tiffStart + view.getUint32(entry.entryOffset + 8, little);
+  if (!isInBounds(bytes.length, start, entry.count)) return;
   for (let i = 0; i < value.length; i++) bytes[start + i] = value.charCodeAt(i);
   for (let i = value.length; i < entry.count; i++) bytes[start + i] = 0; // 残りは NUL 埋め
 }
@@ -330,14 +379,20 @@ function zeroOutGps(bytes: Uint8Array, view: DataView, little: boolean, tiffStar
     if (valueBytes > 4) {
       const rel = view.getUint32(entry.entryOffset + 8, little);
       const abs = tiffStart + rel;
-      for (let i = 0; i < valueBytes; i++) {
-        if (bytes[abs + i] != null) bytes[abs + i] = 0;
+      // ゼロ埋めの範囲は検証済みのバイト範囲に限定する。壊れた count で
+      // バッファ外まで書きに行かないようにするため
+      if (isInBounds(bytes.length, abs, valueBytes)) {
+        for (let i = 0; i < valueBytes; i++) bytes[abs + i] = 0;
       }
     }
-    for (let i = 0; i < 4; i++) bytes[entry.entryOffset + 8 + i] = 0;
+    if (isInBounds(bytes.length, entry.entryOffset + 8, 4)) {
+      for (let i = 0; i < 4; i++) bytes[entry.entryOffset + 8 + i] = 0;
+    }
   }
-  view.setUint16(structure.gpsIfdOffset, 0, little); // GPS IFD のエントリ数を 0 に
-  view.setUint16(structure.gpsInfoEntry.entryOffset, 0xffff, little); // タグ id を private/unused に
+  if (isInBounds(bytes.length, structure.gpsIfdOffset, 2)) view.setUint16(structure.gpsIfdOffset, 0, little); // GPS IFD のエントリ数を 0 に
+  if (isInBounds(bytes.length, structure.gpsInfoEntry.entryOffset, 2)) {
+    view.setUint16(structure.gpsInfoEntry.entryOffset, 0xffff, little); // タグ id を private/unused に
+  }
 }
 
 /**

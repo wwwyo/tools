@@ -237,6 +237,75 @@ interface AvifEncodeOutcome {
   result: EncodeResult;
 }
 
+// --- AVIF エンコードの直列化・世代管理 ---------------------------------------
+// 品質スライダーをドラッグ中など、AVIF の wasm エンコード（1600px 級で数秒かかる）が
+// 終わらないうちに次のリクエストが積み上がると、未解決の bitmap/ImageData を抱えたまま
+// 並行実行数だけ増えていく。ここでは「実行中は1本だけ」「その間に来たリクエストは
+// 最新の1件だけを覚えておき、今の実行が終わってから改めて1回だけ走らせる」形で
+// trailing-edge に間引く。古い世代（既に上書きされたリクエスト）の結果は使わずに捨てる
+let avifGeneration = 0;
+let avifRunning = false;
+interface AvifJob {
+  image: HTMLImageElement;
+  opts: { format: "avif"; quality: number; longEdgeCap: number | null };
+  sizeBytes: number;
+  generation: number;
+  resolve: (outcome: AvifEncodeOutcome) => void;
+  reject: (error: unknown) => void;
+}
+let avifQueuedJob: AvifJob | null = null;
+
+function runAvifQueue(): void {
+  if (avifRunning) return;
+  const job = avifQueuedJob;
+  if (!job) return;
+  avifQueuedJob = null;
+  avifRunning = true;
+  encodeImage(job.image, job.opts)
+    .then((result) => {
+      if (job.generation !== avifGeneration) {
+        job.reject(new Error("stale AVIF request"));
+        return;
+      }
+      job.resolve({
+        result,
+        row: {
+          format: "avif",
+          label: FORMAT_LABELS.avif,
+          supported: true,
+          bytes: result.blob.size,
+          delta: formatDelta(result.blob.size, job.sizeBytes),
+        },
+      });
+    })
+    .catch((error: unknown) => job.reject(error))
+    .finally(() => {
+      avifRunning = false;
+      runAvifQueue();
+    });
+}
+
+/**
+ * AVIF の wasm エンコードを1本だけ走らせる。呼び出し中に新しい quality/longEdgeCap で
+ * 呼ばれ直したときは、保留中だった古いリクエストをキューから外して最新のものに差し替える
+ * （古いリクエストの Promise は reject され、呼び出し側の runPipelineOnce は既に次の
+ * pipeline 実行に進んでいるため実害はない）。
+ */
+function scheduleAvifEncode(
+  image: HTMLImageElement,
+  opts: { format: "avif"; quality: number; longEdgeCap: number | null },
+  sizeBytes: number,
+): Promise<AvifEncodeOutcome> {
+  avifGeneration++;
+  const generation = avifGeneration;
+  const previousQueued = avifQueuedJob;
+  return new Promise<AvifEncodeOutcome>((resolve, reject) => {
+    previousQueued?.reject(new Error("superseded by a newer AVIF request"));
+    avifQueuedJob = { image, opts, sizeBytes, generation, resolve, reject };
+    runAvifQueue();
+  });
+}
+
 async function computeFormatStage(
   params: PipelineParams,
   sizeOutput: StageBlob,
@@ -257,16 +326,7 @@ async function computeFormatStage(
     }
     if (format === "avif") {
       comparison.push({ format, label: FORMAT_LABELS[format], supported: true, bytes: null, delta: null, pending: true });
-      avifOutcomePromise = encodeImage(image, { format, quality, longEdgeCap }).then((result) => ({
-        result,
-        row: {
-          format,
-          label: FORMAT_LABELS[format],
-          supported: true,
-          bytes: result.blob.size,
-          delta: formatDelta(result.blob.size, sizeOutput.bytes),
-        },
-      }));
+      avifOutcomePromise = scheduleAvifEncode(image, { format, quality, longEdgeCap }, sizeOutput.bytes);
       continue;
     }
     const result = await encodeImage(image, { format, quality, longEdgeCap });
@@ -356,27 +416,37 @@ const CARRY_SEGMENT_NAMES = new Set(["APP1 Exif", "APP1 XMP", "COM"]);
  * 編集の間だけ疑似ヘッダーを被せて共通コードに通し、書き戻すときに剥がす。
  */
 function buildEditedOriginalBuffer(originalArrayBuffer: ArrayBuffer, scan: MetadataScanResult, edits: ExifEdits): ArrayBuffer {
-  const jpegExifSeg = scan.segments.find((s) => s.name === "APP1 Exif");
-  if (jpegExifSeg) {
+  // 1ファイルに APP1 Exif が複数入っていることがある（多重埋め込みツール等）。除去せず
+  // 残す全セグメントに同じ編集を焼き込まないと、キャリー先に古い Orientation/DateTime/GPS が
+  // 残ったセグメントが混ざってしまうため、`.find` ではなく全件へ適用する
+  const jpegExifSegs = scan.segments.filter((s) => s.name === "APP1 Exif");
+  if (jpegExifSegs.length > 0) {
     const copy = originalArrayBuffer.slice(0);
     const bytes = new Uint8Array(copy);
-    const payloadStart = jpegExifSeg.start + 4; // マーカー(2) + 長さ(2) を読み飛ばす
-    const payload = bytes.subarray(payloadStart, jpegExifSeg.end);
-    const edited = applyExifEdits(payload, edits);
-    bytes.set(edited.subarray(0, payload.length), payloadStart);
+    for (const seg of jpegExifSegs) {
+      const payloadStart = seg.start + 4; // マーカー(2) + 長さ(2) を読み飛ばす
+      const payload = bytes.subarray(payloadStart, seg.end);
+      const edited = applyExifEdits(payload, edits);
+      bytes.set(edited.subarray(0, payload.length), payloadStart);
+    }
     return copy;
   }
 
-  const pngExifSeg = scan.segments.find((s) => s.name === "eXIf");
-  if (pngExifSeg) {
-    const { dataStart, dataEnd } = pngChunkDataRange(pngExifSeg);
-    const tiff = new Uint8Array(originalArrayBuffer).subarray(dataStart, dataEnd);
-    const pseudoPayload = new Uint8Array(EXIF_PAYLOAD_HEADER.length + tiff.length);
-    pseudoPayload.set(EXIF_PAYLOAD_HEADER, 0);
-    pseudoPayload.set(tiff, EXIF_PAYLOAD_HEADER.length);
-    const edited = applyExifEdits(pseudoPayload, edits);
-    const editedTiff = edited.subarray(EXIF_PAYLOAD_HEADER.length);
-    return patchPngChunkData(originalArrayBuffer, pngExifSeg, editedTiff);
+  // PNG の eXIf は仕様上たかだか1個だが、念のため同じ全件適用にしておく
+  const pngExifSegs = scan.segments.filter((s) => s.name === "eXIf");
+  if (pngExifSegs.length > 0) {
+    let buffer = originalArrayBuffer;
+    for (const seg of pngExifSegs) {
+      const { dataStart, dataEnd } = pngChunkDataRange(seg);
+      const tiff = new Uint8Array(buffer).subarray(dataStart, dataEnd);
+      const pseudoPayload = new Uint8Array(EXIF_PAYLOAD_HEADER.length + tiff.length);
+      pseudoPayload.set(EXIF_PAYLOAD_HEADER, 0);
+      pseudoPayload.set(tiff, EXIF_PAYLOAD_HEADER.length);
+      const edited = applyExifEdits(pseudoPayload, edits);
+      const editedTiff = edited.subarray(EXIF_PAYLOAD_HEADER.length);
+      buffer = patchPngChunkData(buffer, seg, editedTiff);
+    }
+    return buffer;
   }
 
   return originalArrayBuffer;
@@ -683,11 +753,13 @@ export function buildSizeLadderHtml(rows: SizeLadderRow[], selectedCap: number |
 // DOM 操作（innerHTML への代入・イベント登録）は main.ts 側の責務として残し、
 // ここでは値からマークアップ文字列を組み立てるところまでを担う。
 
+// value はファイル名・MIME・Exif の ASCII フィールドなどバイナリ由来の未検証文字列を
+// そのまま渡されることがあるため、常に escapeHtml を通す（label は呼び出し側の静的文字列のみ）
 function detailRowHtml(label: string, value: string): string {
   return (
     `<div class="flex items-baseline justify-between gap-3 border-b border-border/60 py-1.5 text-sm last:border-b-0">` +
     `<span class="text-muted-foreground">${label}</span>` +
-    `<span class="font-mono text-xs text-foreground">${value}</span>` +
+    `<span class="font-mono text-xs text-foreground">${escapeHtml(value)}</span>` +
     `</div>`
   );
 }
@@ -712,7 +784,7 @@ export function buildOriginalDetailHtml(m: ImageMeta): string {
   const warningHtml = m.mismatch
     ? `<div class="flex items-baseline justify-between gap-3 py-1.5 text-sm">` +
       `<span class="text-destructive">警告</span>` +
-      `<span class="text-xs text-destructive">拡張子(${m.extFormat})と実形式(${m.sniffedFormat})が不一致</span>` +
+      `<span class="text-xs text-destructive">拡張子(${escapeHtml(m.extFormat)})と実形式(${escapeHtml(m.sniffedFormat)})が不一致</span>` +
       `</div>`
     : "";
   return rowsHtml + warningHtml;

@@ -13,7 +13,7 @@
  * "webworker" lib に切り替える必要はない。
  */
 
-import { computeTargetDims, encodeAvif, FORMAT_MIME, type OutputFormat } from "./encodeShared";
+import { computeTargetDims, encodeAvif, FORMAT_MIME, UnsupportedFormatError, type OutputFormat } from "./encodeShared";
 
 interface EncodeRequest {
   id: number;
@@ -25,7 +25,7 @@ interface EncodeRequest {
 
 type EncodeResponse =
   | { id: number; blob: Blob; width: number; height: number }
-  | { id: number; error: string };
+  | { id: number; error: string; unsupportedFormat?: true };
 
 self.onmessage = async (event: MessageEvent<EncodeRequest>) => {
   const { id, bitmap, format, quality, longEdgeCap } = event.data;
@@ -34,13 +34,7 @@ self.onmessage = async (event: MessageEvent<EncodeRequest>) => {
     const canvas = new OffscreenCanvas(dims.width, dims.height);
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("OffscreenCanvas 2d context を取得できませんでした");
-    try {
-      ctx.drawImage(bitmap, 0, 0, dims.width, dims.height);
-    } finally {
-      // 転送されたビットマップは描画後（失敗時も）すぐ手放す。GC 任せにすると
-      // 大きな画像を連続で変換したとき worker 側にデコード済み画素が溜まる
-      bitmap.close();
-    }
+    ctx.drawImage(bitmap, 0, 0, dims.width, dims.height);
 
     let blob: Blob;
     if (format === "avif") {
@@ -61,7 +55,16 @@ self.onmessage = async (event: MessageEvent<EncodeRequest>) => {
     const response: EncodeResponse = {
       id,
       error: error instanceof Error ? error.message : "worker でのエンコードに失敗しました",
+      ...(error instanceof UnsupportedFormatError ? { unsupportedFormat: true as const } : {}),
     };
     self.postMessage(response);
+  } finally {
+    // 転送されたビットマップは、OffscreenCanvas/getContext が例外を投げた場合でも必ず手放す。
+    // GC 任せにすると大きな画像を連続で変換したとき worker 側にデコード済み画素が溜まる
+    try {
+      bitmap.close();
+    } catch {
+      // 既に close 済み、または不正なビットマップ。手放す処理自体は失敗しても無視してよい
+    }
   }
 };

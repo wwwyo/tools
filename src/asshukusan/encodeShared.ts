@@ -59,9 +59,34 @@ function loadAvifEncoder(): Promise<typeof import("@jsquash/avif")> {
   return avifModulePromise;
 }
 
+/**
+ * wasm の初期化・エンコードに失敗した（CSP で wasm 実行がブロックされている等）ことを表す。
+ * 呼び出し側（pipeline.ts / main.ts）はこれを「このセッションでは AVIF が使えない」判定に使う。
+ */
+export class UnsupportedFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnsupportedFormatError";
+  }
+}
+
+/**
+ * 失敗した wasm モジュール Promise をキャッシュから外す。読み込み済みとして使い回すと、
+ * 一度失敗した後の全リクエストが同じ失敗を再現するだけになるため、次回呼び出しで
+ * import からやり直せるようにする（CSP 設定の反映後の再試行等）。
+ */
+export function resetAvifEncoder(): void {
+  avifModulePromise = null;
+}
+
 /** quality は他形式と同じ 0..1 のスケールで受け取り、@jsquash/avif の 0..100 スケールにそのまま引き伸ばす */
 export async function encodeAvif(imageData: ImageData, quality: number): Promise<Blob> {
-  const { encode } = await loadAvifEncoder();
-  const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
-  return new Blob([buf], { type: FORMAT_MIME.avif });
+  try {
+    const { encode } = await loadAvifEncoder();
+    const buf = await encode(imageData, { quality: Math.round(quality * 100), speed: 8 });
+    return new Blob([buf], { type: FORMAT_MIME.avif });
+  } catch (error) {
+    resetAvifEncoder();
+    throw new UnsupportedFormatError(error instanceof Error ? error.message : "AVIF の書き出しに失敗しました");
+  }
 }

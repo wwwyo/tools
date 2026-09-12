@@ -14,12 +14,13 @@ import {
   encodeAvif,
   extensionFor,
   FORMAT_MIME,
+  UnsupportedFormatError,
   type EncodeResult,
   type OutputFormat,
   type ProbedFormat,
 } from "./encodeShared";
 
-export { computeTargetDims, extensionFor };
+export { computeTargetDims, extensionFor, UnsupportedFormatError };
 export type { EncodeResult, OutputFormat, ProbedFormat };
 
 function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Blob | null> {
@@ -49,7 +50,9 @@ export async function detectFormatSupport(): Promise<Record<ProbedFormat, boolea
 
   const [jpeg, webp] = await Promise.all([supports(FORMAT_MIME.jpeg), supports(FORMAT_MIME.webp)]);
   // canvas.toBlob は AVIF を書き出せる実装が無いため probe しない。@jsquash/avif の wasm エンコーダに
-  // 切り替えているので、対応可否は WebAssembly が動くかどうかだけで決まる
+  // 切り替えているため、ここでは「WebAssembly が動くか」という楽観的な初期値だけを返す。
+  // CSP が wasm の実行をブロックしている等で実際のエンコードが失敗した場合は、
+  // encodeImage が投げる UnsupportedFormatError を main.ts が捕まえて support.avif を false に更新する
   const avif = typeof WebAssembly === "object";
   return { jpeg, webp, avif };
 }
@@ -88,7 +91,7 @@ const canUseWorker = typeof OffscreenCanvas !== "undefined" && typeof Worker !==
 
 type WorkerResponse =
   | { id: number; blob: Blob; width: number; height: number }
-  | { id: number; error: string };
+  | { id: number; error: string; unsupportedFormat?: true };
 
 interface PendingEncode {
   resolve: (result: EncodeResult) => void;
@@ -113,8 +116,17 @@ function getEncodeWorker(): Worker {
     const task = pendingEncodes.get(data.id);
     if (!task) return;
     pendingEncodes.delete(data.id);
-    if ("error" in data) task.reject(new Error(data.error));
-    else task.resolve({ blob: data.blob, width: data.width, height: data.height });
+    if ("error" in data) {
+      task.reject(data.unsupportedFormat ? new UnsupportedFormatError(data.error) : new Error(data.error));
+      if (data.unsupportedFormat) {
+        // wasm 初期化に失敗した worker をそのまま使い回すと、以後のリクエストも同じ失敗を
+        // 繰り返すだけになる。次回の呼び出しで作り直せるよう、ここで明示的に捨てる
+        w.terminate();
+        if (encodeWorker === w) encodeWorker = null;
+      }
+    } else {
+      task.resolve({ blob: data.blob, width: data.width, height: data.height });
+    }
   };
   w.onerror = (event) => {
     // worker の起動失敗など、個々の message ではなく worker 自体が壊れたケース。
@@ -141,12 +153,36 @@ async function encodeImageViaWorker(
   // imageOrientation の既定値はブラウザで異なり（Safari は Exif の向きを適用しない）、
   // <img> を drawImage するメインスレッド経路と結果がずれるので明示する
   const bitmap = await createImageBitmap(img, { imageOrientation: "from-image" });
-  const w = getEncodeWorker();
+
+  let w: Worker;
+  try {
+    w = getEncodeWorker();
+  } catch (error) {
+    // new Worker 自体が同期的に投げる環境（module worker 非対応・CSP 拒否等）は、
+    // このリクエスト限りメインスレッド経路にフォールバックする
+    console.error(error);
+    bitmap.close();
+    return encodeImageMainThread(img, opts);
+  }
+
   const id = nextRequestId++;
-  return new Promise<EncodeResult>((resolve, reject) => {
-    pendingEncodes.set(id, { resolve, reject });
-    w.postMessage({ id, bitmap, format: opts.format, quality: opts.quality, longEdgeCap: opts.longEdgeCap }, [bitmap]);
-  });
+  try {
+    return await new Promise<EncodeResult>((resolve, reject) => {
+      pendingEncodes.set(id, { resolve, reject });
+      w.postMessage({ id, bitmap, format: opts.format, quality: opts.quality, longEdgeCap: opts.longEdgeCap }, [bitmap]);
+    });
+  } catch (error) {
+    // postMessage が同期的に投げた場合（構造化複製の失敗等）はビットマップがまだ worker へ
+    // 転送されていないため、ここで明示的に閉じないと保持されたままになる
+    pendingEncodes.delete(id);
+    console.error(error);
+    try {
+      bitmap.close();
+    } catch {
+      // 転送が一部進んでいた等で既に閉じられない状態でも、フォールバックは続行する
+    }
+    return encodeImageMainThread(img, opts);
+  }
 }
 
 /**

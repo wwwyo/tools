@@ -93,9 +93,9 @@ WebP は EXIF / XMP / ICCP チャンクを読み飛ばすだけでは済まな�
 
 `encodeImage`（canvas への drawImage・toBlob、AVIF の wasm エンコード）はどれも大きな画像では数百ms〜数秒かかり、メインスレッドで実行するとその間ページ全体が固まる。`encode.worker.ts` に module worker を1体だけ遅延生成し、`OffscreenCanvas` 上で描画・エンコードまで完結させることで、UI（ノードのクリック・スライダー操作）を触れる状態に保ったまま処理する。パイプラインの各段は直列に呼ばれる設計（サイズ段 → フォーマット比較表も1件ずつ await する。上記「逐次エンコード」参照）で、複数の encode リクエストが同時に飛ぶことはないため、worker は1体で足りる。リクエストごとに作り直す・複数体持つ利点がなく、生成コストと（AVIF を選んだ場合の）wasm の二重ロードを避けられる。メインスレッドは `createImageBitmap(img)` でビットマップを作り、Transferable として worker へ move するだけに留め、画素データのコピーは発生させない。`OffscreenCanvas`/`Worker` が使えない環境（古い Safari 等）だけ `encodeImageMainThread`（`encode.ts`）にフォールバックし、メインスレッドで完結させる。メタデータ段（バイト列の読み飛ばし・再挿入）は画像全体のデコード・エンコードを伴わない軽い処理のため、worker へは移さずメインスレッドに残した。書き出し対応 probe（`detectFormatSupport`）も 1×1 canvas の軽い処理のままメインスレッドに残している。
 
-### AVIF だけ wasm エンコーダを積んでいる理由
+### 検品時のヘッダー読み取りをまとめて 64 KiB にしている理由
 
-フォーマット判定と PNG IHDR は先頭 32 byte で足りるが、JPEG の Exif（APP1）セグメントは 16bit 長で最大 64 KiB になりうる。Orientation タグ・メタデータセグメント走査の両方が届くよう、ヘッダーはまとめて 64 KiB 読む。画像全体を ArrayBuffer に載せないのは、巨大ファイルでメモリを二重に持たないため。
+フォーマット判定と PNG IHDR は先頭 32 byte で足りるが、JPEG の Exif（APP1）セグメントは 16bit 長で最大 64 KiB になりうる。Orientation タグ・メタデータセグメント走査の両方が届くよう、画像読み込み直後の検品（`imageMeta.ts` の `extractMetadata`）ではヘッダーをまとめて 64 KiB だけ読む。これは「本編集で使う全体を読む前に、軽い検品だけ先に済ませる」ための最適化であり、画像全体を ArrayBuffer に載せないという意味ではない。実際、パイプライン本体（`main.ts` の `handleFileSelected`）はこの直後に `file.arrayBuffer()` でファイル全体を読み、`state.originalArrayBuffer` として保持し続ける。メタデータの走査・除去・Exif 編集（`metadataStrip.ts` / `exif.ts`）はどれもこの全体バッファを前提に動く。
 
 ## ファイル構成
 
