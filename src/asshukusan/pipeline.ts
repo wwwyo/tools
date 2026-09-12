@@ -26,10 +26,15 @@ import {
   patchPngChunkData,
   segmentDescription,
   segmentContentPreview,
+  extractIccProfileBytes,
+  bestEffortDecode,
+  XMP_APP1_HEADER,
   type MetadataScanResult,
   type MetadataSegment,
 } from "./metadataStrip";
 import { applyExifEdits, EXIF_PAYLOAD_HEADER, type ExifEdits } from "./exif";
+import { parseIccProfile, type IccProfileInfo } from "./icc";
+import { parseXmpPacket, type XmpInfo } from "./xmp";
 
 /** 元ファイルの実形式から、そのまま同形式で再エンコードする際に使う出力形式へ落とす */
 const SNIFFED_TO_REENCODE_FORMAT: Record<string, OutputFormat> = {
@@ -815,19 +820,109 @@ export function buildSizeInfoHtml(meta: ImageMeta, detail: SizeStageDetail, afte
 }
 
 
-/** 既定で保持する（除去チェックボックスを OFF にする）セグメント名。
- * ICC は色空間の定義そのもの、未知の APP2 / MPF は正体不明・副画像索引という
- * 「消してよいか判断できないもの」の代表であり、安全側に倒して保持を既定にする */
-const DEFAULT_KEEP_SEGMENT_NAMES = new Set(["APP2 ICC_PROFILE", "APP2", "APP2 MPF"]);
+/** セグメント名から一言の平易な日本語タイトルを返す（チェックボックス行の見出し）。
+ * 技術的な id（`APP1 Exif` 等）はこのタイトルの直後に小さく添えるだけにし、
+ * 「一覧を眺めればジャーゴンの羅列」にならないようにする（ユーザーフィードバック「個別に消せるなら一覧は不要」） */
+const SEGMENT_TITLES: Record<string, string> = {
+  "APP1 Exif": "撮影情報（Exif）",
+  eXIf: "撮影情報（Exif）",
+  EXIF: "撮影情報（Exif）",
+  "APP1 XMP": "編集情報（XMP）",
+  "XMP ": "編集情報（XMP）",
+  "APP2 ICC_PROFILE": "カラープロファイル（ICC）",
+  ICCP: "カラープロファイル（ICC）",
+  iCCP: "カラープロファイル（ICC）",
+  "APP13 Photoshop": "Photoshop 付随データ（IPTC）",
+  COM: "コメント",
+  tEXt: "テキスト情報（PNG tEXt）",
+  zTXt: "テキスト情報（PNG tEXt）",
+  iTXt: "テキスト情報（PNG tEXt）",
+  tIME: "最終更新時刻（PNG tIME）",
+  "APP2 MPF": "マルチピクチャ索引（MPF）",
+  APP1: "不明な付随データ（APP1）",
+  APP2: "不明な付随データ（APP2）",
+};
 
-/** セグメント名から「除去」チェックボックスのデフォルト値を決める */
+function segmentTitle(name: string): string {
+  return SEGMENT_TITLES[name] ?? name;
+}
+
+function isIccSegmentName(name: string): boolean {
+  return name === "APP2 ICC_PROFILE" || name === "ICCP";
+}
+
+function isXmpSegmentName(name: string): boolean {
+  return name === "APP1 XMP" || name === "XMP ";
+}
+
+function isExifSegmentName(name: string): boolean {
+  return name === "APP1 Exif" || name === "eXIf" || name === "EXIF";
+}
+
+/**
+ * ICC セグメント（JPEG APP2 ICC_PROFILE / WebP ICCP）から実プロファイルバイト列を取り出して解析する。
+ * PNG iCCP はプロファイル本体が zlib 圧縮のためここでは扱わない（keyword だけの簡易プレビューのまま）。
+ * 壊れている・対象外なら null を返し、呼び出し側は「概要が読めません」を出す。
+ */
+export function iccProfileInfoForSegment(
+  format: MetadataScanResult["format"],
+  originalArrayBuffer: ArrayBuffer,
+  segment: MetadataSegment,
+): IccProfileInfo | null {
+  try {
+    if (segment.name === "APP2 ICC_PROFILE" && format === "jpeg") {
+      const bytes = extractIccProfileBytes(originalArrayBuffer, segment);
+      return bytes ? parseIccProfile(bytes) : null;
+    }
+    if (segment.name === "ICCP" && format === "webp") {
+      const bytes = new Uint8Array(originalArrayBuffer).subarray(segment.payloadStart, segment.end);
+      return parseIccProfile(bytes);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** XMP セグメント（JPEG APP1 XMP / WebP XMP ）から XML パケットを取り出して解析する */
+export function xmpInfoForSegment(originalArrayBuffer: ArrayBuffer, segment: MetadataSegment): XmpInfo | null {
+  try {
+    const bytes = new Uint8Array(originalArrayBuffer);
+    const xmlStart = segment.name === "APP1 XMP" ? segment.payloadStart + XMP_APP1_HEADER.length : segment.payloadStart;
+    const xml = bestEffortDecode(bytes.subarray(xmlStart, segment.end));
+    return parseXmpPacket(xml);
+  } catch {
+    return null;
+  }
+}
+
+/** 既定で保持する（除去チェックボックスを OFF にする）セグメント名。
+ * 未知の APP2 / MPF は正体不明・副画像索引という「消してよいか判断できないもの」の代表であり、
+ * 安全側に倒して保持を既定にする。ICC はここに含めない（sRGB 判定で個別に決める、下記 defaultRemoveIds） */
+const DEFAULT_KEEP_SEGMENT_NAMES = new Set(["APP2", "APP2 MPF"]);
+
+/** セグメント名から「除去」チェックボックスのデフォルト値を決める（ICC を除く） */
 export function defaultRemoveForSegmentName(name: string): boolean {
   return !DEFAULT_KEEP_SEGMENT_NAMES.has(name);
 }
 
-/** 除去できないメタデータ（scan.strippable === false の形式、例: WebP）で全チェックの初期値を決める際に使う */
-export function defaultRemoveIds(scan: MetadataScanResult): Set<string> {
-  return new Set(scan.segments.filter((s) => defaultRemoveForSegmentName(s.name)).map((s) => s.id));
+/**
+ * 除去チェックボックスの初期値一式を決める。ICC だけは sRGB 判定に従う: sRGB 相当なら
+ * 除去しても実害が無いため既定 ON、そうでなければ色味が変わるため既定 OFF にする。
+ * WebP のように除去そのものが未対応の形式でも、チェックボックスの初期状態としては同じ規則を使う
+ * （実際の除去には反映されないが、UI 上の意思表示として意味を持つ）。
+ */
+export function defaultRemoveIds(scan: MetadataScanResult, originalArrayBuffer: ArrayBuffer): Set<string> {
+  const ids = new Set<string>();
+  for (const seg of scan.segments) {
+    if (isIccSegmentName(seg.name)) {
+      const info = iccProfileInfoForSegment(scan.format, originalArrayBuffer, seg);
+      if (info?.isSrgbEquivalent) ids.add(seg.id);
+      continue;
+    }
+    if (defaultRemoveForSegmentName(seg.name)) ids.add(seg.id);
+  }
+  return ids;
 }
 
 /** セグメントの説明・中身プレビュー・Exif タグ名等はバイナリ由来のテキストを含みうるため、
@@ -836,23 +931,111 @@ export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
-/** APP1 Exif / eXIf の行にだけ挿す、タグテーブル差し込み用の空コンテナ。main.ts が
- * segListEl.innerHTML を設定した直後にこの要素を見つけ、インタラクティブなタグテーブル
+/** APP1 Exif / eXIf / WebP EXIF の行にだけ挿す、タグテーブル差し込み用の空コンテナ。main.ts が
+ * セクション本文の innerHTML を設定した直後にこの要素を見つけ、インタラクティブなタグテーブル
  * （チェックボックス・Orientation/DateTime 系の編集欄・GPS IFD 疑似行）を組み立てて入れる。
  * ここで文字列として組み立てないのは、編集欄が select/input への DOM 参照とイベント登録を
  * 必要とするため（他の Exif 編集欄と同じ理由、本ファイル冒頭コメント参照）。 */
 function exifTagTableContainerHtml(segName: string): string {
-  return segName === "APP1 Exif" || segName === "eXIf" ? `<div class="pl-6 pt-1" data-exif-tag-table></div>` : "";
+  return isExifSegmentName(segName) ? `<div class="pt-1" data-exif-tag-table></div>` : "";
+}
+
+function detailInfoRowHtml(label: string, value: string): string {
+  return (
+    `<div class="flex items-baseline justify-between gap-3 border-b border-border/40 py-1 last:border-b-0">` +
+    `<span class="text-muted-foreground">${escapeHtml(label)}</span>` +
+    `<span class="break-all text-right font-mono text-xs text-foreground">${escapeHtml(value)}</span>` +
+    `</div>`
+  );
+}
+
+/** ICC タグ1件の行（signature・size・decoded） */
+function iccTagRowHtml(tag: { signature: string; size: number; decoded: string | null }): string {
+  return (
+    `<div class="flex items-baseline justify-between gap-3 border-b border-border/30 py-0.5 last:border-b-0">` +
+    `<span class="font-mono text-foreground">${escapeHtml(tag.signature || "?")}</span>` +
+    `<span class="font-mono text-muted-foreground">${formatBytes(tag.size)}</span>` +
+    `<span class="min-w-0 flex-1 truncate text-right text-muted-foreground">${tag.decoded ? escapeHtml(tag.decoded) : ""}</span>` +
+    `</div>`
+  );
+}
+
+/** ICC セクションの本文: 概要行 + sRGB 判定の一言 + タグ一覧の折りたたみ */
+function iccBodyHtml(info: IccProfileInfo | null): string {
+  if (!info) {
+    return `<p class="text-xs text-muted-foreground">プロファイルの詳細を読み取れませんでした。</p>`;
+  }
+  const version = info.versionMajor != null ? `${info.versionMajor}.${info.versionMinor ?? 0}` : "（読めない）";
+  const rows =
+    detailInfoRowHtml("プロファイル名", info.description ?? "（読めない）") +
+    detailInfoRowHtml("色空間", info.colorSpace ?? "（読めない）") +
+    detailInfoRowHtml("PCS", info.pcs ?? "（読めない）") +
+    detailInfoRowHtml("デバイス種別", info.deviceClassLabel ?? info.deviceClass ?? "（読めない）") +
+    detailInfoRowHtml("バージョン", version) +
+    detailInfoRowHtml("作成日", info.creationDate ?? "（読めない）") +
+    detailInfoRowHtml("作成元", info.creatorSignature ?? info.preferredCmm ?? "（読めない）") +
+    detailInfoRowHtml("レンダリングインテント", info.renderingIntentLabel ?? "（読めない）") +
+    detailInfoRowHtml("白色点", info.whitePoint ? `${info.whitePoint.x.toFixed(4)}, ${info.whitePoint.y.toFixed(4)}, ${info.whitePoint.z.toFixed(4)}` : "（読めない）") +
+    detailInfoRowHtml("原色 R", info.redPrimary ? `${info.redPrimary.x.toFixed(4)}, ${info.redPrimary.y.toFixed(4)}, ${info.redPrimary.z.toFixed(4)}` : "（読めない）") +
+    detailInfoRowHtml("原色 G", info.greenPrimary ? `${info.greenPrimary.x.toFixed(4)}, ${info.greenPrimary.y.toFixed(4)}, ${info.greenPrimary.z.toFixed(4)}` : "（読めない）") +
+    detailInfoRowHtml("原色 B", info.bluePrimary ? `${info.bluePrimary.x.toFixed(4)}, ${info.bluePrimary.y.toFixed(4)}, ${info.bluePrimary.z.toFixed(4)}` : "（読めない）");
+  const judgmentClass = info.isSrgbEquivalent ? "text-muted-foreground" : "text-destructive";
+  const tagRows = info.tags.map(iccTagRowHtml).join("");
+  return (
+    `<p class="pb-1 text-xs font-semibold ${judgmentClass}">${escapeHtml(info.judgmentText)}</p>` +
+    `<div class="flex flex-col text-xs">${rows}</div>` +
+    `<details class="pt-1.5 text-xs">` +
+    `<summary class="cursor-pointer select-none text-muted-foreground">タグ一覧 (${info.tags.length})</summary>` +
+    `<div class="flex flex-col pt-1">${tagRows}</div>` +
+    `</details>`
+  );
+}
+
+/** XMP セクションの本文: 見つかったプロパティを行で、無ければ「プロパティ N 件」+ 生 XML の折りたたみ */
+function xmpBodyHtml(info: XmpInfo | null): string {
+  if (!info) {
+    return `<p class="text-xs text-muted-foreground">XMP パケットを読み取れませんでした。</p>`;
+  }
+  const rows: string[] = [];
+  if (info.creatorTool) rows.push(detailInfoRowHtml("CreatorTool", info.creatorTool));
+  if (info.createDate) rows.push(detailInfoRowHtml("CreateDate", info.createDate));
+  if (info.modifyDate) rows.push(detailInfoRowHtml("ModifyDate", info.modifyDate));
+  if (info.creators.length > 0) rows.push(detailInfoRowHtml("creator", info.creators.join(", ")));
+  if (info.description) rows.push(detailInfoRowHtml("description", info.description));
+  if (info.subjects.length > 0) rows.push(detailInfoRowHtml("subject", info.subjects.join(", ")));
+  if (info.photoshopDateCreated) rows.push(detailInfoRowHtml("DateCreated (Photoshop)", info.photoshopDateCreated));
+  if (info.exifCount > 0) rows.push(detailInfoRowHtml("exif:* プロパティ", `${info.exifCount} 件`));
+  if (info.tiffCount > 0) rows.push(detailInfoRowHtml("tiff:* プロパティ", `${info.tiffCount} 件`));
+
+  if (rows.length === 0) {
+    return (
+      `<p class="text-xs text-muted-foreground">プロパティ ${info.unknownPropertyCount} 件</p>` +
+      `<details class="pt-1.5 text-xs">` +
+      `<summary class="cursor-pointer select-none text-muted-foreground">生の XML（先頭 2000 文字）</summary>` +
+      `<pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-1.5 text-[11px] text-muted-foreground">${escapeHtml(info.rawXmlPreview)}</pre>` +
+      `</details>`
+    );
+  }
+  return (
+    `<div class="flex flex-col text-xs">${rows.join("")}</div>` +
+    `<details class="pt-1.5 text-xs">` +
+    `<summary class="cursor-pointer select-none text-muted-foreground">生の XML（先頭 2000 文字）</summary>` +
+    `<pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-1.5 text-[11px] text-muted-foreground">${escapeHtml(info.rawXmlPreview)}</pre>` +
+    `</details>`
+  );
 }
 
 /**
- * メタデータノードの segment チェックボックス一覧。checkboxesDisabled は canvas 出力で
- * この形式（WebP/PNG/AVIF）へは引き継げないケースで、選択operationがもう意味を持たないことを
- * 視覚的にも伝えるために使う（disabled にするだけで、選択状態自体は保持する）。
- * 各行はチェックボックス+名前+バイト数の1行目、平易な説明の2行目、（読めれば）中身プレビューの3行目からなる。
- * APP1 Exif / eXIf だけは、プレビューの代わりにタグテーブル用の空コンテナを持つ。
+ * メタデータカードのセクション一覧を組み立てる。各セクションは既定で展開済みで、
+ * 見出し（平易な日本語タイトル + 小さく添えた技術 id・バイト数）とチェックボックスを
+ * 1行目に、セグメント種別ごとの詳細を本文に持つ（ユーザーフィードバック「個別に消せるなら
+ * 一覧は不要」: バレバレの id を並べただけの一覧ではなく、中身が見える形にする）。
+ * checkboxesDisabled は canvas 出力でこの形式（WebP/PNG/AVIF）へ引き継げないケースで使う
+ * （選択状態自体は保持したまま、見た目と実際の操作だけを無効化する）。
+ * WebP はそもそも除去が未対応なため、format が "webp" のときは常にチェックボックスを
+ * 無効化し、その理由を隣に添える。
  */
-export function buildMetadataSegmentRowsHtml(
+export function buildMetadataSectionsHtml(
   scan: MetadataScanResult,
   removeIds: ReadonlySet<string>,
   checkboxesDisabled: boolean,
@@ -861,32 +1044,44 @@ export function buildMetadataSegmentRowsHtml(
   if (scan.segments.length === 0) {
     return `<p class="py-1 text-xs text-muted-foreground">検出されたメタデータセグメントはありません。</p>`;
   }
+  const webpUnsupported = scan.format === "webp";
   return scan.segments
     .map((seg) => {
       const checked = removeIds.has(seg.id);
+      const disabled = checkboxesDisabled || webpUnsupported;
       const description = segmentDescription(seg.name);
-      const content = segmentContentPreview(originalArrayBuffer, seg);
-      const iccNote =
-        seg.name === "APP2 ICC_PROFILE"
-          ? `<p class="pl-6 pb-1 text-xs text-muted-foreground">sRGB でない ICC プロファイルを除去すると色味が変わることがあります。</p>`
-          : "";
+      const descriptionHtml = description ? `<p class="pb-1 text-xs text-muted-foreground">${escapeHtml(description)}</p>` : "";
+
+      let bodyHtml: string;
+      if (isExifSegmentName(seg.name)) {
+        bodyHtml = exifTagTableContainerHtml(seg.name);
+      } else if (isIccSegmentName(seg.name)) {
+        bodyHtml = iccBodyHtml(iccProfileInfoForSegment(scan.format, originalArrayBuffer, seg));
+      } else if (isXmpSegmentName(seg.name)) {
+        bodyHtml = xmpBodyHtml(xmpInfoForSegment(originalArrayBuffer, seg));
+      } else {
+        const content = segmentContentPreview(originalArrayBuffer, seg);
+        bodyHtml = content ? `<p class="break-all font-mono text-xs text-muted-foreground">${escapeHtml(content)}</p>` : "";
+      }
+
       const mpfNote =
         seg.name === "APP2 MPF"
-          ? `<p class="pl-6 pb-1 text-xs text-muted-foreground">除去すると MPO の副画像（視差画像など）も一緒に失われます。</p>`
+          ? `<p class="pb-1 text-xs text-muted-foreground">除去すると MPO の副画像（視差画像など）も一緒に失われます。</p>`
           : "";
-      const descriptionHtml = description
-        ? `<p class="pl-6 text-xs text-muted-foreground">${escapeHtml(description)}</p>`
-        : "";
-      const contentHtml = content
-        ? `<p class="pl-6 pt-0.5 break-all font-mono text-xs text-muted-foreground">${escapeHtml(content)}</p>`
-        : "";
+      const webpNote = webpUnsupported ? `<span class="text-xs text-muted-foreground">（WebP の除去は未対応）</span>` : "";
+
       return (
-        `<div class="border-b border-border/60 py-1 last:border-b-0">` +
-        `<label class="flex items-center justify-between gap-3 text-sm">` +
-        `<span class="flex items-center gap-1.5"><input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${seg.id}"${checked ? " checked" : ""}${checkboxesDisabled ? " disabled" : ""} /><span class="font-semibold text-foreground">${escapeHtml(seg.name)}</span></span>` +
-        `<span class="font-mono text-xs text-foreground">${formatBytes(seg.bytes)}</span>` +
-        `</label>${descriptionHtml}${contentHtml}${iccNote}${mpfNote}${exifTagTableContainerHtml(seg.name)}` +
-        `</div>`
+        `<details class="border-b border-border/60 py-1.5 last:border-b-0" open>` +
+        `<summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-sm marker:content-none">` +
+        `<span class="flex min-w-0 items-center gap-1.5">` +
+        `<input type="checkbox" class="asshukusan-seg-checkbox accent-primary shrink-0" data-seg-id="${seg.id}"${checked ? " checked" : ""}${disabled ? " disabled" : ""} onclick="event.stopPropagation()" />` +
+        `<span class="truncate font-semibold text-foreground">${escapeHtml(segmentTitle(seg.name))}</span>` +
+        `<span class="shrink-0 font-mono text-xs text-muted-foreground">${escapeHtml(seg.name)} · ${formatBytes(seg.bytes)}</span>` +
+        `${webpNote}` +
+        `</span>` +
+        `</summary>` +
+        `<div class="pl-6 pt-1">${descriptionHtml}${bodyHtml}${mpfNote}</div>` +
+        `</details>`
       );
     })
     .join("");

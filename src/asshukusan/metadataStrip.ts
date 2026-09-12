@@ -6,7 +6,7 @@
  * セグメント/チャンクの境界さえ正しく見つければ中身を解釈せず安全に削れるため。
  */
 
-import { asciiAt, byteAt, formatBytes } from "./imageMeta";
+import { asciiAt, byteAt } from "./imageMeta";
 
 /** 検出した1セグメント/チャンク分の情報 */
 export interface MetadataSegment {
@@ -49,7 +49,7 @@ function concatUint8Arrays(chunks: Uint8Array[]): ArrayBuffer {
 // --- JPEG ---------------------------------------------------------------
 
 /** 標準 XMP の名前空間 URI 識別子。29 byte 目の NUL まで含めて比較する（仕様上 NUL 込みで固定長） */
-const XMP_APP1_HEADER = "http://ns.adobe.com/xap/1.0/\0";
+export const XMP_APP1_HEADER = "http://ns.adobe.com/xap/1.0/\0";
 
 /** ICC プロファイルの識別子（"ICC_PROFILE" + NUL の 12 byte） */
 const ICC_APP2_HEADER = "ICC_PROFILE\0";
@@ -154,17 +154,20 @@ const ICC_GROUP_ID = "APP2 ICC_PROFILE#group";
 
 interface IccPieceInfo {
   segStart: number;
+  segEnd: number;
+  payloadStart: number;
   seqNo: number;
   numMarkers: number;
 }
 
-/** バッファ全体を1回走査し、APP2 ICC_PROFILE の各ピースの seqNo/numMarkers を集める */
+/** バッファ全体を1回走査し、APP2 ICC_PROFILE の各ピースの位置・seqNo/numMarkers を集める */
 function collectIccPieces(bytes: Uint8Array, view: DataView): IccPieceInfo[] {
   const pieces: IccPieceInfo[] = [];
-  walkJpegMarkers(bytes, view, (_marker, segStart, _segEnd, label, headerStart) => {
+  walkJpegMarkers(bytes, view, (_marker, segStart, segEnd, label, headerStart) => {
     if (label !== "APP2 ICC_PROFILE") return;
-    const info = iccMarkerInfo(bytes, headerStart + 2);
-    if (info) pieces.push({ segStart, seqNo: info.seqNo, numMarkers: info.numMarkers });
+    const payloadStart = headerStart + 2;
+    const info = iccMarkerInfo(bytes, payloadStart);
+    if (info) pieces.push({ segStart, segEnd, payloadStart, seqNo: info.seqNo, numMarkers: info.numMarkers });
   });
   return pieces;
 }
@@ -220,6 +223,37 @@ function mergeIccGroup(segments: MetadataSegment[]): MetadataSegment[] {
     result.push(seg);
   }
   return result;
+}
+
+/**
+ * JPEG APP2 ICC_PROFILE の実プロファイルバイト列を返す。分割グループ（`ICC_GROUP_ID`）の場合、
+ * `segment.start`〜`segment.end` は各ピースのマーカー・長さ・14byte ICC ヘッダーを挟んで
+ * 連続しているだけでプロファイル本体としては連結できないため、バッファを再走査して
+ * 全ピースを集め、seqNo 順に「ICC_PROFILE\0 + seqNo + numMarkers」の14byteヘッダーを
+ * 剥がしたペイロードだけを連結する。単一ピースならヘッダーを剥がすだけで済む。
+ */
+export function extractIccProfileBytes(originalArrayBuffer: ArrayBuffer, segment: MetadataSegment): Uint8Array | null {
+  if (segment.name !== "APP2 ICC_PROFILE") return null;
+  const bytes = new Uint8Array(originalArrayBuffer);
+  if (segment.id !== ICC_GROUP_ID) {
+    const profileStart = segment.payloadStart + ICC_APP2_HEADER.length + 2;
+    if (profileStart > segment.end) return null;
+    return bytes.subarray(profileStart, segment.end);
+  }
+  const view = new DataView(originalArrayBuffer);
+  const pieces = collectIccPieces(bytes, view);
+  const validStarts = validIccGroupSegStarts(pieces);
+  if (validStarts.size === 0) return null;
+  const ordered = pieces.filter((p) => validStarts.has(p.segStart)).toSorted((a, b) => a.seqNo - b.seqNo);
+  const parts = ordered.map((p) => bytes.subarray(p.payloadStart + ICC_APP2_HEADER.length + 2, p.segEnd));
+  const total = parts.reduce((sum, p) => sum + p.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
 }
 
 function scanJpegMetadata(buf: ArrayBuffer): MetadataScanResult {
@@ -500,7 +534,7 @@ function latin1Decode(bytes: Uint8Array): string {
 }
 
 /** UTF-8 として妥当ならそれを、そうでなければ Latin-1 として読む（COM はエンコーディングを仕様で決めていないため） */
-function bestEffortDecode(bytes: Uint8Array): string {
+export function bestEffortDecode(bytes: Uint8Array): string {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
@@ -570,77 +604,26 @@ function previewJpegCom(bytes: Uint8Array, segment: MetadataSegment): string | n
   return text ? truncatePreview(text) : null;
 }
 
-/** JPEG APP1 XMP: XML はそのまま出さず、サイズと拾えた範囲で CreatorTool / dc:creator だけ添える */
-function previewJpegXmp(bytes: Uint8Array, segment: MetadataSegment): string {
-  const xmlStart = segment.payloadStart + XMP_APP1_HEADER.length;
-  const xmlBytes = bytes.subarray(xmlStart, segment.end);
-  const xml = bestEffortDecode(xmlBytes);
-  const creatorTool = /CreatorTool[=>]"?([^"<]*)/.exec(xml)?.[1]?.trim();
-  const creator = /dc:creator[\s\S]{0,200}?<rdf:li[^>]*>([^<]*)</.exec(xml)?.[1]?.trim();
-  let text = `XML, ${formatBytes(xmlBytes.length)}`;
-  if (creatorTool) text += ` / CreatorTool: ${creatorTool}`;
-  if (creator) text += ` / creator: ${creator}`;
-  return text;
-}
-
-/**
- * ICC プロファイル本体（ヘッダー128byte + タグテーブル）から desc タグを探し、
- * プロファイル名を返す。textDescriptionType（ASCII, 旧仕様）と mluc（UTF-16BE, 現行仕様）の両方を扱う。
- */
-function iccProfileDescription(bytes: Uint8Array, profileStart: number, profileEnd: number): string | null {
-  if (profileEnd - profileStart < 132) return null;
+/** PNG tIME: year(2, BE) + month(1) + day(1) + hour(1) + minute(1) + second(1) の7byte固定長 */
+function previewPngTime(bytes: Uint8Array, segment: MetadataSegment): string | null {
+  const { dataStart, dataEnd } = pngChunkDataRange(segment);
+  if (dataEnd - dataStart < 7) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const tagCount = view.getUint32(profileStart + 128, false);
-  let descOffset: number | null = null;
-  let descSize: number | null = null;
-  for (let i = 0; i < tagCount; i++) {
-    const entryOffset = profileStart + 132 + i * 12;
-    if (entryOffset + 12 > profileEnd) break;
-    if (asciiAt(bytes, entryOffset, 4) === "desc") {
-      descOffset = profileStart + view.getUint32(entryOffset + 4, false);
-      descSize = view.getUint32(entryOffset + 8, false);
-      break;
-    }
-  }
-  if (descOffset == null || descSize == null || descOffset + 12 > profileEnd) return null;
-
-  const typeSig = asciiAt(bytes, descOffset, 4);
-  if (typeSig === "desc") {
-    // textDescriptionType: type(4) + reserved(4) + asciiCount(4) + ascii（NUL 終端）
-    const asciiLen = view.getUint32(descOffset + 8, false);
-    const start = descOffset + 12;
-    const end = Math.min(start + Math.max(0, asciiLen - 1), profileEnd);
-    const text = latin1Decode(bytes.subarray(start, end));
-    return text || null;
-  }
-  if (typeSig === "mluc") {
-    // multiLocalizedUnicodeType: type(4) + reserved(4) + recordCount(4) + recordSize(4) + records...
-    const recordCount = view.getUint32(descOffset + 8, false);
-    if (recordCount === 0) return null;
-    const recordLen = view.getUint32(descOffset + 20, false); // 先頭レコードの文字列長（byte）
-    const recordOffset = view.getUint32(descOffset + 24, false); // タグ先頭からの相対オフセット
-    const strStart = descOffset + recordOffset;
-    const strEnd = Math.min(strStart + recordLen, profileEnd);
-    let text = "";
-    for (let i = strStart; i + 1 < strEnd; i += 2) {
-      const code = view.getUint16(i, false);
-      if (code !== 0) text += String.fromCharCode(code);
-    }
-    return text || null;
-  }
-  return null;
-}
-
-/** JPEG APP2 ICC_PROFILE: "ICC_PROFILE\0" + seqNo(1) + numMarkers(1) の後にプロファイル本体が続く */
-function previewJpegIcc(bytes: Uint8Array, segment: MetadataSegment): string | null {
-  const profileStart = segment.payloadStart + ICC_APP2_HEADER.length + 2; // "ICC_PROFILE\0"(12) + seqNo+numMarkers(2)
-  const desc = iccProfileDescription(bytes, profileStart, segment.end);
-  return desc ? `プロファイル名: ${desc}` : null;
+  const year = view.getUint16(dataStart, false);
+  const [month, day, hour, minute] = [
+    byteAt(bytes, dataStart + 2),
+    byteAt(bytes, dataStart + 3),
+    byteAt(bytes, dataStart + 4),
+    byteAt(bytes, dataStart + 5),
+  ];
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}`;
 }
 
 /**
  * セグメントの中身のうち「解凍・重い解釈をせずに安価に読める」ものだけをプレビュー文字列にする。
- * 対象外（APP1 Exif / eXIf は別枠の Exif テーブルで表示するためここでは扱わない等）や
+ * 対象外（APP1 Exif / eXIf は別枠の Exif テーブルで、APP1 XMP / APP2 ICC_PROFILE / WebP の
+ * EXIF・XMP・ICCP はメタデータカードのセクション本文で個別に詳細表示するためここでは扱わない）や
  * パース失敗時は null を返し、呼び出し側は説明文だけを出す。
  */
 export function segmentContentPreview(originalArrayBuffer: ArrayBuffer, segment: MetadataSegment): string | null {
@@ -657,10 +640,8 @@ export function segmentContentPreview(originalArrayBuffer: ArrayBuffer, segment:
         return previewPngIccp(bytes, segment);
       case "COM":
         return previewJpegCom(bytes, segment);
-      case "APP1 XMP":
-        return previewJpegXmp(bytes, segment);
-      case "APP2 ICC_PROFILE":
-        return previewJpegIcc(bytes, segment);
+      case "tIME":
+        return previewPngTime(bytes, segment);
       default:
         return null;
     }

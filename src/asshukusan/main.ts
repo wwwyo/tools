@@ -23,7 +23,7 @@ import {
   buildSizeInfoHtml,
   buildSizeLadderHtml,
   buildFormatComparisonHtml,
-  buildMetadataSegmentRowsHtml,
+  buildMetadataSectionsHtml,
   buildMetadataTotalsHtml,
   escapeHtml,
   metadataStatusNotes,
@@ -493,13 +493,8 @@ function buildMetadataControls(
 
   const segListEl = document.createElement("div");
   segListEl.className = "flex flex-col";
-  segListEl.innerHTML = buildMetadataSegmentRowsHtml(scan, state.removeIds, false, originalArrayBuffer);
-
-  const segSection = document.createElement("div");
-  segSection.className = "flex flex-col gap-1.5";
-  segSection.innerHTML = `<span class="text-sm font-semibold text-foreground">除去するメタデータ</span>`;
-  segSection.append(segListEl);
-  rootEl.append(segSection);
+  segListEl.innerHTML = buildMetadataSectionsHtml(scan, state.removeIds, false, originalArrayBuffer);
+  rootEl.append(segListEl);
 
   segListEl.addEventListener("change", (event) => {
     const target = event.target;
@@ -1264,7 +1259,7 @@ function renderMetadataDetail(): void {
   const d = pipeline.metadata.detail;
   // canvas 出力で引き継げない形式（WebP/PNG/AVIF）のときだけ、セグメントチェックボックスを
   // 視覚的に disabled にする（選択状態自体は state.removeIds に残したまま触らない）
-  const checkboxesDisabled = d.cameFromCanvas && d.carryUnsupported;
+  const checkboxesDisabled = d.scan.format === "webp" || (d.cameFromCanvas && d.carryUnsupported);
   controls.segListEl.querySelectorAll<HTMLInputElement>(".asshukusan-seg-checkbox").forEach((el) => {
     el.disabled = checkboxesDisabled;
   });
@@ -1597,7 +1592,7 @@ async function handleFileSelected(file: File, generation: number = nextLoadGener
     state.quality = 0.8;
     state.longEdgeCap = null;
     state.formatChoice = "original";
-    state.removeIds = defaultRemoveIds(metadataScan);
+    state.removeIds = defaultRemoveIds(metadataScan, originalArrayBuffer);
     state.exifEdits = { removeGps: exifTags?.hasGps ?? false, removeTags: new Set() };
     state.metadataScan = metadataScan;
     state.exifTags = exifTags;

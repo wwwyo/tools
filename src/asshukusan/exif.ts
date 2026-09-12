@@ -548,12 +548,29 @@ export function extractExifPayload(originalArrayBuffer: ArrayBuffer, sniffedForm
     if (!seg) return null;
     const { dataStart, dataEnd } = pngChunkDataRange(seg);
     const tiff = new Uint8Array(originalArrayBuffer).subarray(dataStart, dataEnd);
-    const payload = new Uint8Array(EXIF_PAYLOAD_HEADER.length + tiff.length);
-    payload.set(EXIF_PAYLOAD_HEADER, 0);
-    payload.set(tiff, EXIF_PAYLOAD_HEADER.length);
-    return payload;
+    return withExifPseudoHeaderIfNeeded(tiff);
+  }
+  if (sniffedFormat === "WebP") {
+    // WebP の EXIF チャンクは読み取り専用（除去は未対応）だが、値は見せたい。
+    // 仕様上はチャンク先頭から生 TIFF だが、ツールによっては "Exif\0\0" を含めて
+    // 書き出すものもあるため、両方を受け付ける（withExifPseudoHeaderIfNeeded が判定）
+    const seg = scan.segments.find((s) => s.name === "EXIF");
+    if (!seg) return null;
+    const chunk = new Uint8Array(originalArrayBuffer).subarray(seg.payloadStart, seg.end);
+    return withExifPseudoHeaderIfNeeded(chunk);
   }
   return null;
+}
+
+/** 生 TIFF に "Exif\0\0" 疑似ヘッダーを被せて JPEG の APP1 payload と同じ形に揃える。
+ * 既に "Exif\0\0" で始まっている（PNG eXIf は仕様上そうならないが、WebP EXIF チャンクは
+ * ツールによって含む場合がある）ならそのまま返す */
+function withExifPseudoHeaderIfNeeded(data: Uint8Array): Uint8Array {
+  if (data.length >= 6 && asciiAt(data, 0, 6) === "Exif\0\0") return data;
+  const payload = new Uint8Array(EXIF_PAYLOAD_HEADER.length + data.length);
+  payload.set(EXIF_PAYLOAD_HEADER, 0);
+  payload.set(data, EXIF_PAYLOAD_HEADER.length);
+  return payload;
 }
 
 /** JPEG の Exif（APP1）から Orientation タグ（0x0112）だけを読む軽量パス */
