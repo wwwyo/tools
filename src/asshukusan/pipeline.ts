@@ -943,16 +943,16 @@ export function escapeHtml(s: string): string {
 function exifTagTableShellHtml(seg: MetadataSegment): string {
   return (
     `${metadataTableOpenHtml()}<tbody data-exif-tag-table></tbody></table>` +
-    `<p class="pt-1 text-xs text-muted-foreground">すべて削除対象のときはセグメントごと除去（−${formatBytes(seg.bytes)}）</p>`
+    `<p class="pt-1 text-xs text-muted-foreground">すべて削除のときはセグメントごと除去（−${formatBytes(seg.bytes)}）</p>`
   );
 }
 
-/** メタデータの詳細テーブル（削除対象・項目・値・サイズ）の開始タグ + ヘッダー行 */
+/** メタデータの詳細テーブル（削除・項目・値・サイズ）の開始タグ + ヘッダー行 */
 function metadataTableOpenHtml(): string {
   return (
     `<table class="w-full text-xs">` +
     `<thead><tr class="border-b border-border text-left text-muted-foreground">` +
-    `<th class="w-8 py-1 pr-1 font-normal">削除対象</th>` +
+    `<th class="w-8 py-1 pr-1 font-normal">削除</th>` +
     `<th class="py-1 pr-2 font-normal">項目</th>` +
     `<th class="py-1 pr-2 font-normal">値</th>` +
     `<th class="w-16 py-1 text-right font-normal">サイズ</th>` +
@@ -965,7 +965,7 @@ function metadataTableHtml(rowsHtml: string): string {
   return `${metadataTableOpenHtml()}<tbody>${rowsHtml}</tbody></table>`;
 }
 
-/** テーブル1行（削除対象セル + 項目 + 値 + サイズ）。itemHtml/valueHtml は既にエスケープ済みの
+/** テーブル1行（削除セル + 項目 + 値 + サイズ）。itemHtml/valueHtml は既にエスケープ済みの
  * HTML を受け取る（select/input 等の埋め込みを許すため）。読み取り専用の値は
  * `metadataReadonlyRowHtml` を使う */
 function metadataRowHtml(checkboxHtml: string, itemHtml: string, valueHtml: string, sizeHtml: string): string {
@@ -1100,7 +1100,7 @@ function simpleSegmentBodyHtml(seg: MetadataSegment, content: string | null, che
  * 状態で表示する（ユーザーフィードバック「折りたたみを無くし、常時全部見える形にする」）。
  * 見出しはプレーンなタイトル + 小さく添えた技術 id・バイト数のみとし、除去チェックボックスは
  * 持たない（セクションまるごとの除去チェックボックスは廃止し、本文のテーブル内の行単位で選ぶ）。
- * 本文は種別ごとに詳細が変わるが、共通して「削除対象・項目・値・サイズ」の4列テーブルを持つ。
+ * 本文は種別ごとに詳細が変わるが、共通して「削除・項目・値・サイズ」の4列テーブルを持つ。
  * checkboxesDisabled は canvas 出力でこの形式（WebP/PNG/AVIF）へ引き継げないケースで使う
  * （選択状態自体は保持したまま、見た目と実際の操作だけを無効化する）。
  * WebP はそもそも除去が未対応なため、format が "webp" のときは常にチェックボックスを
@@ -1182,7 +1182,7 @@ export function metadataStatusNotes(detail: MetadataStageDetail): string[] {
     notes.push("WebP のメタデータ除去は未対応です。");
   }
   if (detail.tagsRemovedCount > 0) {
-    notes.push("タグ単位の削除はサイズを変えません。サイズを減らすには全タグを削除対象にしてください。");
+    notes.push("タグ単位の削除はサイズを変えません。サイズを減らすには全タグを削除にしてください。");
   }
   return notes;
 }
