@@ -1142,7 +1142,7 @@ export function buildMetadataSectionsHtml(
       const webpNote = webpUnsupported ? `<span class="text-xs text-muted-foreground">（WebP の除去は未対応）</span>` : "";
 
       return (
-        `<div class="border-b border-border/60 py-1.5 last:border-b-0">` +
+        `<div class="border-b border-border/60 py-5 first:pt-1 last:border-b-0 last:pb-1">` +
         `<div class="flex min-w-0 items-center justify-between gap-3 text-sm">` +
         `<span class="truncate font-semibold text-foreground">${escapeHtml(segmentTitle(seg.name))}</span>` +
         `<span class="shrink-0 font-mono text-xs text-muted-foreground">${escapeHtml(seg.name)} · ${formatBytes(seg.bytes)}${webpNote ? ` ${webpNote}` : ""}</span>` +
@@ -1180,9 +1180,6 @@ export function metadataStatusNotes(detail: MetadataStageDetail): string[] {
   }
   if (detail.scan.strippable === false && detail.scan.segments.length > 0) {
     notes.push("WebP のメタデータ除去は未対応です。");
-  }
-  if (detail.tagsRemovedCount > 0) {
-    notes.push("タグ単位の削除はサイズを変えません。サイズを減らすには全タグを削除にしてください。");
   }
   return notes;
 }
