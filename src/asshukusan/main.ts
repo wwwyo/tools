@@ -26,6 +26,7 @@ import {
   buildMetadataSectionsHtml,
   buildMetadataTotalsHtml,
   escapeHtml,
+  isExifSegmentName,
   metadataStatusNotes,
   metadataSummaryLines,
   defaultRemoveIds,
@@ -198,6 +199,10 @@ interface AppState {
   /** 画像読み込み時に一度だけ求める初期スキャン。セグメント一覧・Exif テーブルの元データ */
   metadataScan: MetadataScanResult | null;
   exifTags: ExifTags | null;
+  /** Exif タグテーブルの行データ（IFD0 + Exif IFD）。除去可能な行を数えて `syncExifSegmentRemoval` が使う */
+  exifEntries: ExifEntryInfo[];
+  /** APP1 Exif / eXIf / WebP EXIF セグメントの id（無ければ null）。全タグ除去時にこの id を `removeIds` へ足す */
+  exifSegmentId: string | null;
   metadataControls: MetadataControls | null;
   activeStage: StageId;
   pipeline: PipelineResult | null;
@@ -228,6 +233,8 @@ const state: AppState = {
   exifEdits: { removeGps: false, removeTags: new Set() },
   metadataScan: null,
   exifTags: null,
+  exifEntries: [],
+  exifSegmentId: null,
   metadataControls: null,
   activeStage: "original",
   pipeline: null,
@@ -298,8 +305,8 @@ function buildFormatControls(): FormatControls {
 interface MetadataControls {
   rootEl: HTMLDivElement;
   segListEl: HTMLDivElement;
-  /** Exif/eXIf 行があれば、その中のタグテーブル用コンテナ（`pipeline.ts` の `buildMetadataSegmentRowsHtml` が空で用意する） */
-  exifTagTableEl: HTMLDivElement | null;
+  /** Exif/eXIf 行があれば、その中のタグテーブル用 `<tbody>`（`pipeline.ts` の `exifTagTableShellHtml` が空で用意する） */
+  exifTagTableEl: HTMLTableSectionElement | null;
 }
 
 const ORIENTATION_LABELS: Record<number, string> = {
@@ -360,45 +367,45 @@ function buildExifValueCellHtml(entry: ExifEntryInfo, exifTags: ExifTags): strin
   return `<span class="truncate" title="${escapeHtml(entry.display)}">${escapeHtml(entry.display)}</span>`;
 }
 
-/** タグ1件を1行にする。消せないタグ（ポインタ・壊れた値）はチェックボックスの代わりに空白を置く */
+/** タグ1件を1行（`<tr>`）にする。消せないタグ（ポインタ・壊れた値）はチェックボックスセルを空のままにする */
 function buildExifTagRowHtml(entry: ExifEntryInfo, removeTags: ReadonlySet<string>, exifTags: ExifTags): string {
   const removable = isExifEntryRemovable(entry);
   const key = exifTagKey(entry.ifd, entry.tag);
   const checked = removeTags.has(key);
   const label = entry.name ?? exifTagHexLabel(entry.tag);
   const checkboxHtml = removable
-    ? `<input type="checkbox" class="asshukusan-exif-tag-checkbox accent-primary shrink-0" data-tag-key="${key}"${checked ? " checked" : ""} />`
-    : `<span class="inline-block w-3.5 shrink-0"></span>`;
+    ? `<input type="checkbox" class="asshukusan-exif-tag-checkbox accent-primary" data-tag-key="${key}"${checked ? " checked" : ""} />`
+    : "";
   return (
-    `<div class="flex items-center gap-2 border-b border-border/40 py-1 last:border-b-0">` +
-    `<label class="flex w-40 shrink-0 items-center gap-1.5">${checkboxHtml}<span class="truncate font-semibold text-foreground" title="${escapeHtml(label)}">${escapeHtml(label)}</span></label>` +
-    `<span class="min-w-0 flex-1">${buildExifValueCellHtml(entry, exifTags)}</span>` +
-    `<span class="w-14 shrink-0 text-right font-mono text-muted-foreground">${formatBytes(entry.valueBytes)}</span>` +
-    `</div>`
+    `<tr class="border-b border-border/40 last:border-b-0 align-top">` +
+    `<td class="w-8 py-1 pr-1">${checkboxHtml}</td>` +
+    `<td class="py-1 pr-2 font-semibold text-foreground" title="${escapeHtml(label)}">${escapeHtml(label)}</td>` +
+    `<td class="min-w-0 py-1 pr-2">${buildExifValueCellHtml(entry, exifTags)}</td>` +
+    `<td class="w-16 py-1 text-right font-mono text-muted-foreground">${formatBytes(entry.valueBytes)}</td>` +
+    `</tr>`
   );
 }
 
-/** GPS IFD は「GPS 情報を消す（whole GPS IFD）」の既存チェックボックスのまま、タグテーブルの疑似行として出す */
+/** GPS IFD は「GPS 情報を消す（whole GPS IFD）」の既存チェックボックスのまま、タグテーブルの疑似行（`<tr>`）として出す */
 function buildGpsPseudoRowHtml(exifTags: ExifTags): string {
   const latLon =
     exifTags.gpsLat != null && exifTags.gpsLon != null ? `${exifTags.gpsLat.toFixed(4)}, ${exifTags.gpsLon.toFixed(4)}` : "あり";
   return (
-    `<div class="flex items-center gap-2 border-b border-border/40 py-1 last:border-b-0">` +
-    `<label class="flex w-40 shrink-0 items-center gap-1.5">` +
-    `<input type="checkbox" id="exif-gps-remove" class="accent-primary shrink-0" />` +
-    `<span class="truncate font-semibold text-foreground">GPS IFD</span>` +
-    `</label>` +
-    `<span class="min-w-0 flex-1 truncate">${escapeHtml(latLon)}</span>` +
-    `<span class="w-14 shrink-0"></span>` +
-    `</div>`
+    `<tr class="border-b border-border/40 last:border-b-0 align-top">` +
+    `<td class="w-8 py-1 pr-1"><input type="checkbox" id="exif-gps-remove" class="accent-primary" /></td>` +
+    `<td class="py-1 pr-2 font-semibold text-foreground">GPS IFD</td>` +
+    `<td class="min-w-0 py-1 pr-2"><span class="break-all">${escapeHtml(latLon)}</span></td>` +
+    `<td class="w-16 py-1 text-right font-mono text-muted-foreground"></td>` +
+    `</tr>`
   );
 }
 
-/** Exif/eXIf 行のタグテーブル（IFD0 + Exif IFD の全エントリ + GPS IFD 疑似行）の中身 */
+/** Exif/eXIf 行のタグテーブル（IFD0 + Exif IFD の全エントリ + GPS IFD 疑似行）の `<tr>` 一式。
+ * `pipeline.ts` の `exifTagTableShellHtml` が用意した空 `<tbody>` にそのまま差し込む */
 function buildExifTagTableHtml(entries: ExifEntryInfo[], exifTags: ExifTags, removeTags: ReadonlySet<string>): string {
   const rows = entries.map((entry) => buildExifTagRowHtml(entry, removeTags, exifTags)).join("");
   const gpsRow = exifTags.hasGps ? buildGpsPseudoRowHtml(exifTags) : "";
-  return `<div class="flex flex-col text-xs">${rows}${gpsRow}</div>`;
+  return rows + gpsRow;
 }
 
 /** removeTags は ReadonlySet で公開しているため、変更のたびに新しい Set を作って state へ入れ替える（in-place mutate しない） */
@@ -407,6 +414,31 @@ function toggleRemoveTag(key: string, checked: boolean): void {
   if (checked) next.add(key);
   else next.delete(key);
   state.exifEdits.removeTags = next;
+  syncExifSegmentRemoval();
+}
+
+/** Exif/eXIf/WebP EXIF セグメントのうち、実際にチェックボックスを持つ（消せる）タグのキー一式 */
+function removableExifTagKeys(entries: readonly ExifEntryInfo[]): string[] {
+  return entries.filter(isExifEntryRemovable).map((entry) => exifTagKey(entry.ifd, entry.tag));
+}
+
+/**
+ * セクションまるごとの除去チェックボックスを廃止した代わりに、「タグ + GPS IFD の除去可能な
+ * 行を全部チェックしたら、結果としてセグメントごと物理除去される」という規則を state.removeIds
+ * へ反映する（ユーザーフィードバック）。呼び出しはタグ・GPS チェックボックスの change のたびと、
+ * 画像読み込み直後の既定値確定時。除去可能な行が1つも無い場合は空集合に対する全称命題として
+ * 真になる（=セグメントごと除去）。これは「消せる中身が無いなら残す理由も無い」という、
+ * 旧デフォルト（Exif は既定で全部除去）と整合する挙動でもある。
+ */
+function syncExifSegmentRemoval(): void {
+  const segId = state.exifSegmentId;
+  const exifTags = state.exifTags;
+  if (!segId || !exifTags) return;
+  const removableKeys = removableExifTagKeys(state.exifEntries);
+  const allTagsChecked = removableKeys.every((key) => state.exifEdits.removeTags.has(key));
+  const gpsChecked = exifTags.hasGps ? state.exifEdits.removeGps : true;
+  if (allTagsChecked && gpsChecked) state.removeIds.add(segId);
+  else state.removeIds.delete(segId);
 }
 
 /**
@@ -415,7 +447,7 @@ function toggleRemoveTag(key: string, checked: boolean): void {
  * 編集欄を disabled にする必要があるため、チェックボックスの change ハンドラからも
  * ここで作った要素を参照できるよう、対応表（タグキー→編集要素）を返す。
  */
-function wireExifTagTable(containerEl: HTMLDivElement, exifTags: ExifTags): void {
+function wireExifTagTable(containerEl: HTMLTableSectionElement, exifTags: ExifTags): void {
   const orientationEditorEl = containerEl.querySelector<HTMLSelectElement>("#exif-orientation-select");
   orientationEditorEl?.addEventListener("change", () => {
     state.exifEdits.orientation = Number.parseInt(orientationEditorEl.value, 10);
@@ -454,6 +486,7 @@ function wireExifTagTable(containerEl: HTMLDivElement, exifTags: ExifTags): void
     gpsCheckboxEl.checked = exifTags.hasGps;
     gpsCheckboxEl.addEventListener("change", () => {
       state.exifEdits.removeGps = gpsCheckboxEl.checked;
+      syncExifSegmentRemoval();
       scheduleRecompute();
     });
   }
@@ -508,7 +541,7 @@ function buildMetadataControls(
 
   // buildMetadataSegmentRowsHtml が APP1 Exif / eXIf 行の中に用意した空コンテナへ、
   // インタラクティブなタグテーブル（チェックボックス・編集欄）を差し込む
-  const exifTagTableEl = segListEl.querySelector<HTMLDivElement>("[data-exif-tag-table]");
+  const exifTagTableEl = segListEl.querySelector<HTMLTableSectionElement>("[data-exif-tag-table]");
   if (exifTagTableEl && exifTags) {
     exifTagTableEl.innerHTML = buildExifTagTableHtml(exifEntries, exifTags, state.exifEdits.removeTags);
     wireExifTagTable(exifTagTableEl, exifTags);
@@ -1263,10 +1296,10 @@ function renderMetadataDetail(): void {
   controls.segListEl.querySelectorAll<HTMLInputElement>(".asshukusan-seg-checkbox").forEach((el) => {
     el.disabled = checkboxesDisabled;
   });
-  // Exif セグメント自体を除去する設定になっている（または全体が disabled）ときは、
-  // タグ単位の操作はもう意味を持たない（セグメント除去が優先される）ため、タグテーブルごと dim する
-  const exifSeg = d.scan.segments.find((s) => s.name === "APP1 Exif" || s.name === "eXIf");
-  const exifTagsDisabled = checkboxesDisabled || (exifSeg != null && state.removeIds.has(exifSeg.id));
+  // Exif セグメントの物理除去は「全タグ + GPS IFD をチェックした結果」として導出される値であり
+  // （syncExifSegmentRemoval）、タグ単位の操作を無効化する独立の理由にはならない。ここで dim するのは
+  // canvas 出力への引き継ぎ不可などタグ操作そのものが意味を持たないケースだけ
+  const exifTagsDisabled = checkboxesDisabled;
   if (controls.exifTagTableEl) {
     const tableEl = controls.exifTagTableEl;
     tableEl.classList.toggle("opacity-50", exifTagsDisabled);
@@ -1593,9 +1626,15 @@ async function handleFileSelected(file: File, generation: number = nextLoadGener
     state.longEdgeCap = null;
     state.formatChoice = "original";
     state.removeIds = defaultRemoveIds(metadataScan, originalArrayBuffer);
-    state.exifEdits = { removeGps: exifTags?.hasGps ?? false, removeTags: new Set() };
+    // Exif は「セグメントごと除去」チェックボックスを持たず、タグ + GPS IFD の除去可能な行を
+    // 全部チェックした結果として導出する（syncExifSegmentRemoval）。既定は旧来どおり
+    // Exif を丸ごと除去なので、既定値も全タグ・GPS ともチェック済みから始める
+    state.exifEdits = { removeGps: exifTags?.hasGps ?? false, removeTags: new Set(removableExifTagKeys(exifEntries)) };
     state.metadataScan = metadataScan;
     state.exifTags = exifTags;
+    state.exifEntries = exifEntries;
+    state.exifSegmentId = metadataScan.segments.find((s) => isExifSegmentName(s.name))?.id ?? null;
+    syncExifSegmentRemoval();
     state.activeStage = "original";
     state.pipeline = null;
     state.pipelineDirty = true;

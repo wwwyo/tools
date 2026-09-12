@@ -117,14 +117,3 @@
     transition: none;
   }
 }
-
-/*
- * メタデータカードのセクション見出し（<summary>）は独自のチェックボックス+バイト数レイアウトを
- * 持つため、ブラウザ既定の三角マーカーを消す。`marker:content-none`（Tailwind の ::marker）は
- * Firefox には効くが、Chrome/Safari は <summary> に ::-webkit-details-marker を使うため、
- * こちらも明示的に消さないと二重に矢印が残る。
- */
-.asshukusan-node summary::-webkit-details-marker,
-#detail-panel summary::-webkit-details-marker {
-  display: none;
-}

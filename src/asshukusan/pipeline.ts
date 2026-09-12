@@ -855,7 +855,7 @@ function isXmpSegmentName(name: string): boolean {
   return name === "APP1 XMP" || name === "XMP ";
 }
 
-function isExifSegmentName(name: string): boolean {
+export function isExifSegmentName(name: string): boolean {
   return name === "APP1 Exif" || name === "eXIf" || name === "EXIF";
 }
 
@@ -931,105 +931,176 @@ export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
-/** APP1 Exif / eXIf / WebP EXIF の行にだけ挿す、タグテーブル差し込み用の空コンテナ。main.ts が
- * セクション本文の innerHTML を設定した直後にこの要素を見つけ、インタラクティブなタグテーブル
+/** APP1 Exif / eXIf / WebP EXIF の行にだけ挿す、タグテーブル差し込み用の空 tbody。main.ts が
+ * セクション本文の innerHTML を設定した直後にこの要素を見つけ、インタラクティブな行
  * （チェックボックス・Orientation/DateTime 系の編集欄・GPS IFD 疑似行）を組み立てて入れる。
  * ここで文字列として組み立てないのは、編集欄が select/input への DOM 参照とイベント登録を
- * 必要とするため（他の Exif 編集欄と同じ理由、本ファイル冒頭コメント参照）。 */
-function exifTagTableContainerHtml(segName: string): string {
-  return isExifSegmentName(segName) ? `<div class="pt-1" data-exif-tag-table></div>` : "";
-}
-
-function detailInfoRowHtml(label: string, value: string): string {
+ * 必要とするため（他の Exif 編集欄と同じ理由、本ファイル冒頭コメント参照）。
+ * すべての除去可能な行（タグ + GPS IFD）が消す対象になったときは、main.ts 側が
+ * セグメント自体を `removeIds` に加えてゼロ埋めではなく物理除去に切り替える
+ * （ユーザーフィードバック「セクションまるごとのチェックボックスは廃止し、行の状態から導出する」）。
+ * その規則をその場で伝えるため、テーブルの下に常時この注記を添える。 */
+function exifTagTableShellHtml(seg: MetadataSegment): string {
   return (
-    `<div class="flex items-baseline justify-between gap-3 border-b border-border/40 py-1 last:border-b-0">` +
-    `<span class="text-muted-foreground">${escapeHtml(label)}</span>` +
-    `<span class="break-all text-right font-mono text-xs text-foreground">${escapeHtml(value)}</span>` +
-    `</div>`
+    `${metadataTableOpenHtml()}<tbody data-exif-tag-table></tbody></table>` +
+    `<p class="pt-1 text-xs text-muted-foreground">すべて削除対象のときはセグメントごと除去（−${formatBytes(seg.bytes)}）</p>`
   );
 }
 
-/** ICC タグ1件の行（signature・size・decoded） */
-function iccTagRowHtml(tag: { signature: string; size: number; decoded: string | null }): string {
+/** メタデータの詳細テーブル（削除対象・項目・値・サイズ）の開始タグ + ヘッダー行 */
+function metadataTableOpenHtml(): string {
   return (
-    `<div class="flex items-baseline justify-between gap-3 border-b border-border/30 py-0.5 last:border-b-0">` +
-    `<span class="font-mono text-foreground">${escapeHtml(tag.signature || "?")}</span>` +
-    `<span class="font-mono text-muted-foreground">${formatBytes(tag.size)}</span>` +
-    `<span class="min-w-0 flex-1 truncate text-right text-muted-foreground">${tag.decoded ? escapeHtml(tag.decoded) : ""}</span>` +
-    `</div>`
+    `<table class="w-full text-xs">` +
+    `<thead><tr class="border-b border-border text-left text-muted-foreground">` +
+    `<th class="w-8 py-1 pr-1 font-normal">削除対象</th>` +
+    `<th class="py-1 pr-2 font-normal">項目</th>` +
+    `<th class="py-1 pr-2 font-normal">値</th>` +
+    `<th class="w-16 py-1 text-right font-normal">サイズ</th>` +
+    `</tr></thead>`
   );
 }
 
-/** ICC セクションの本文: 概要行 + sRGB 判定の一言 + タグ一覧の折りたたみ */
-function iccBodyHtml(info: IccProfileInfo | null): string {
+/** rowsHtml（`<tr>` の列）を table 全体に包む */
+function metadataTableHtml(rowsHtml: string): string {
+  return `${metadataTableOpenHtml()}<tbody>${rowsHtml}</tbody></table>`;
+}
+
+/** テーブル1行（削除対象セル + 項目 + 値 + サイズ）。itemHtml/valueHtml は既にエスケープ済みの
+ * HTML を受け取る（select/input 等の埋め込みを許すため）。読み取り専用の値は
+ * `metadataReadonlyRowHtml` を使う */
+function metadataRowHtml(checkboxHtml: string, itemHtml: string, valueHtml: string, sizeHtml: string): string {
+  return (
+    `<tr class="border-b border-border/40 last:border-b-0 align-top">` +
+    `<td class="w-8 py-1 pr-1">${checkboxHtml}</td>` +
+    `<td class="py-1 pr-2 font-semibold text-foreground">${itemHtml}</td>` +
+    `<td class="min-w-0 py-1 pr-2">${valueHtml}</td>` +
+    `<td class="w-16 py-1 text-right font-mono text-muted-foreground">${sizeHtml}</td>` +
+    `</tr>`
+  );
+}
+
+/** チェックボックスも消去対象の区別も無い、読み取り専用の情報行（label/value は生文字列で渡し、ここで escape する） */
+function metadataReadonlyRowHtml(label: string, value: string, sizeBytes?: number): string {
+  return metadataRowHtml(
+    "",
+    escapeHtml(label),
+    `<span class="break-all">${escapeHtml(value)}</span>`,
+    sizeBytes != null ? formatBytes(sizeBytes) : "",
+  );
+}
+
+/** セグメントまるごとの除去チェックボックス。main.ts の `segListEl` change ハンドラが
+ * `.asshukusan-seg-checkbox` を委譲で拾うため、テーブルの行内に置いても配線は変わらない */
+function segmentCheckboxHtml(segId: string, checked: boolean, disabled: boolean): string {
+  return `<input type="checkbox" class="asshukusan-seg-checkbox accent-primary" data-seg-id="${segId}"${checked ? " checked" : ""}${disabled ? " disabled" : ""} />`;
+}
+
+/** ICC セクションの本文: 1行目にチェック可能な概要行（sRGB 判定込み）、以下はプロファイル情報・
+ * タグ一覧を読み取り専用行として並べる（アコーディオンは持たない） */
+function iccBodyHtml(info: IccProfileInfo | null, seg: MetadataSegment, checked: boolean, disabled: boolean): string {
+  const checkboxHtml = segmentCheckboxHtml(seg.id, checked, disabled);
   if (!info) {
-    return `<p class="text-xs text-muted-foreground">プロファイルの詳細を読み取れませんでした。</p>`;
-  }
-  const version = info.versionMajor != null ? `${info.versionMajor}.${info.versionMinor ?? 0}` : "（読めない）";
-  const rows =
-    detailInfoRowHtml("プロファイル名", info.description ?? "（読めない）") +
-    detailInfoRowHtml("色空間", info.colorSpace ?? "（読めない）") +
-    detailInfoRowHtml("PCS", info.pcs ?? "（読めない）") +
-    detailInfoRowHtml("デバイス種別", info.deviceClassLabel ?? info.deviceClass ?? "（読めない）") +
-    detailInfoRowHtml("バージョン", version) +
-    detailInfoRowHtml("作成日", info.creationDate ?? "（読めない）") +
-    detailInfoRowHtml("作成元", info.creatorSignature ?? info.preferredCmm ?? "（読めない）") +
-    detailInfoRowHtml("レンダリングインテント", info.renderingIntentLabel ?? "（読めない）") +
-    detailInfoRowHtml("白色点", info.whitePoint ? `${info.whitePoint.x.toFixed(4)}, ${info.whitePoint.y.toFixed(4)}, ${info.whitePoint.z.toFixed(4)}` : "（読めない）") +
-    detailInfoRowHtml("原色 R", info.redPrimary ? `${info.redPrimary.x.toFixed(4)}, ${info.redPrimary.y.toFixed(4)}, ${info.redPrimary.z.toFixed(4)}` : "（読めない）") +
-    detailInfoRowHtml("原色 G", info.greenPrimary ? `${info.greenPrimary.x.toFixed(4)}, ${info.greenPrimary.y.toFixed(4)}, ${info.greenPrimary.z.toFixed(4)}` : "（読めない）") +
-    detailInfoRowHtml("原色 B", info.bluePrimary ? `${info.bluePrimary.x.toFixed(4)}, ${info.bluePrimary.y.toFixed(4)}, ${info.bluePrimary.z.toFixed(4)}` : "（読めない）");
-  const judgmentClass = info.isSrgbEquivalent ? "text-muted-foreground" : "text-destructive";
-  const tagRows = info.tags.map(iccTagRowHtml).join("");
-  return (
-    `<p class="pb-1 text-xs font-semibold ${judgmentClass}">${escapeHtml(info.judgmentText)}</p>` +
-    `<div class="flex flex-col text-xs">${rows}</div>` +
-    `<details class="pt-1.5 text-xs">` +
-    `<summary class="cursor-pointer select-none text-muted-foreground">タグ一覧 (${info.tags.length})</summary>` +
-    `<div class="flex flex-col pt-1">${tagRows}</div>` +
-    `</details>`
-  );
-}
-
-/** XMP セクションの本文: 見つかったプロパティを行で、無ければ「プロパティ N 件」+ 生 XML の折りたたみ */
-function xmpBodyHtml(info: XmpInfo | null): string {
-  if (!info) {
-    return `<p class="text-xs text-muted-foreground">XMP パケットを読み取れませんでした。</p>`;
-  }
-  const rows: string[] = [];
-  if (info.creatorTool) rows.push(detailInfoRowHtml("CreatorTool", info.creatorTool));
-  if (info.createDate) rows.push(detailInfoRowHtml("CreateDate", info.createDate));
-  if (info.modifyDate) rows.push(detailInfoRowHtml("ModifyDate", info.modifyDate));
-  if (info.creators.length > 0) rows.push(detailInfoRowHtml("creator", info.creators.join(", ")));
-  if (info.description) rows.push(detailInfoRowHtml("description", info.description));
-  if (info.subjects.length > 0) rows.push(detailInfoRowHtml("subject", info.subjects.join(", ")));
-  if (info.photoshopDateCreated) rows.push(detailInfoRowHtml("DateCreated (Photoshop)", info.photoshopDateCreated));
-  if (info.exifCount > 0) rows.push(detailInfoRowHtml("exif:* プロパティ", `${info.exifCount} 件`));
-  if (info.tiffCount > 0) rows.push(detailInfoRowHtml("tiff:* プロパティ", `${info.tiffCount} 件`));
-
-  if (rows.length === 0) {
-    return (
-      `<p class="text-xs text-muted-foreground">プロパティ ${info.unknownPropertyCount} 件</p>` +
-      `<details class="pt-1.5 text-xs">` +
-      `<summary class="cursor-pointer select-none text-muted-foreground">生の XML（先頭 2000 文字）</summary>` +
-      `<pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-1.5 text-[11px] text-muted-foreground">${escapeHtml(info.rawXmlPreview)}</pre>` +
-      `</details>`
+    return metadataTableHtml(
+      metadataRowHtml(
+        checkboxHtml,
+        escapeHtml("ICC プロファイル"),
+        `<span class="text-muted-foreground">プロファイルの詳細を読み取れませんでした。</span>`,
+        formatBytes(seg.bytes),
+      ),
     );
   }
-  return (
-    `<div class="flex flex-col text-xs">${rows.join("")}</div>` +
-    `<details class="pt-1.5 text-xs">` +
-    `<summary class="cursor-pointer select-none text-muted-foreground">生の XML（先頭 2000 文字）</summary>` +
-    `<pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-1.5 text-[11px] text-muted-foreground">${escapeHtml(info.rawXmlPreview)}</pre>` +
-    `</details>`
+  const version = info.versionMajor != null ? `${info.versionMajor}.${info.versionMinor ?? 0}` : "（読めない）";
+  const judgmentClass = info.isSrgbEquivalent ? "text-muted-foreground" : "text-destructive";
+  const summaryRow = metadataRowHtml(
+    checkboxHtml,
+    escapeHtml("ICC プロファイル"),
+    `<span class="${judgmentClass}">${escapeHtml(info.judgmentText)}</span>`,
+    formatBytes(seg.bytes),
   );
+  const infoRows = (
+    [
+      ["プロファイル名", info.description ?? "（読めない）"],
+      ["色空間", info.colorSpace ?? "（読めない）"],
+      ["PCS", info.pcs ?? "（読めない）"],
+      ["デバイス種別", info.deviceClassLabel ?? info.deviceClass ?? "（読めない）"],
+      ["バージョン", version],
+      ["作成日", info.creationDate ?? "（読めない）"],
+      [
+        "白色点",
+        info.whitePoint ? `${info.whitePoint.x.toFixed(4)}, ${info.whitePoint.y.toFixed(4)}, ${info.whitePoint.z.toFixed(4)}` : "（読めない）",
+      ],
+      [
+        "原色 R",
+        info.redPrimary ? `${info.redPrimary.x.toFixed(4)}, ${info.redPrimary.y.toFixed(4)}, ${info.redPrimary.z.toFixed(4)}` : "（読めない）",
+      ],
+      [
+        "原色 G",
+        info.greenPrimary ? `${info.greenPrimary.x.toFixed(4)}, ${info.greenPrimary.y.toFixed(4)}, ${info.greenPrimary.z.toFixed(4)}` : "（読めない）",
+      ],
+      [
+        "原色 B",
+        info.bluePrimary ? `${info.bluePrimary.x.toFixed(4)}, ${info.bluePrimary.y.toFixed(4)}, ${info.bluePrimary.z.toFixed(4)}` : "（読めない）",
+      ],
+      ["レンダリングインテント", info.renderingIntentLabel ?? "（読めない）"],
+    ] satisfies [string, string][]
+  )
+    .map(([label, value]) => metadataReadonlyRowHtml(label, value))
+    .join("");
+  const tagRows = info.tags
+    .map((tag) => metadataReadonlyRowHtml(tag.signature || "?", tag.decoded ?? "", tag.size))
+    .join("");
+  return metadataTableHtml(summaryRow + infoRows + tagRows);
+}
+
+/** XMP セクションの本文: 1行目にチェック可能な概要行（プロパティ件数）、以下は見つかった
+ * プロパティと生 XML（先頭 600 文字）を読み取り専用行として並べる（アコーディオンは持たない） */
+function xmpBodyHtml(info: XmpInfo | null, seg: MetadataSegment, checked: boolean, disabled: boolean): string {
+  const checkboxHtml = segmentCheckboxHtml(seg.id, checked, disabled);
+  if (!info) {
+    return metadataTableHtml(
+      metadataRowHtml(
+        checkboxHtml,
+        escapeHtml("XMP パケット"),
+        `<span class="text-muted-foreground">XMP パケットを読み取れませんでした。</span>`,
+        formatBytes(seg.bytes),
+      ),
+    );
+  }
+  const knownRows: [string, string][] = [];
+  if (info.creatorTool) knownRows.push(["CreatorTool", info.creatorTool]);
+  if (info.createDate) knownRows.push(["CreateDate", info.createDate]);
+  if (info.modifyDate) knownRows.push(["ModifyDate", info.modifyDate]);
+  if (info.creators.length > 0) knownRows.push(["creator", info.creators.join(", ")]);
+  if (info.description) knownRows.push(["description", info.description]);
+  if (info.subjects.length > 0) knownRows.push(["subject", info.subjects.join(", ")]);
+  if (info.photoshopDateCreated) knownRows.push(["DateCreated (Photoshop)", info.photoshopDateCreated]);
+  if (info.exifCount > 0) knownRows.push(["exif:* プロパティ", `${info.exifCount} 件`]);
+  if (info.tiffCount > 0) knownRows.push(["tiff:* プロパティ", `${info.tiffCount} 件`]);
+
+  const propertyCount = knownRows.length > 0 ? knownRows.length : info.unknownPropertyCount;
+  const summaryRow = metadataRowHtml(checkboxHtml, escapeHtml("XMP パケット"), escapeHtml(`プロパティ ${propertyCount} 件`), formatBytes(seg.bytes));
+  const propertyRows = knownRows.map(([label, value]) => metadataReadonlyRowHtml(label, value)).join("");
+  const rawXmlHtml = `<pre class="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-1.5 font-mono text-[11px] text-muted-foreground">${escapeHtml(info.rawXmlPreview.slice(0, 600))}</pre>`;
+  const rawXmlRow = metadataRowHtml("", escapeHtml("生 XML（先頭600文字）"), rawXmlHtml, "");
+  return metadataTableHtml(summaryRow + propertyRows + rawXmlRow);
+}
+
+/** COM・PNG テキストチャンク・tIME・Photoshop・不明な APP2・MPF 用の1行だけの本文
+ * （デコード済みテキストや説明をそのまま値セルに出す） */
+function simpleSegmentBodyHtml(seg: MetadataSegment, content: string | null, checked: boolean, disabled: boolean): string {
+  const checkboxHtml = segmentCheckboxHtml(seg.id, checked, disabled);
+  const valueHtml = content
+    ? `<span class="break-all font-mono">${escapeHtml(content)}</span>`
+    : `<span class="text-muted-foreground">（内容を読み取れません）</span>`;
+  return metadataTableHtml(metadataRowHtml(checkboxHtml, escapeHtml(segmentTitle(seg.name)), valueHtml, formatBytes(seg.bytes)));
 }
 
 /**
- * メタデータカードのセクション一覧を組み立てる。各セクションは既定で展開済みで、
- * 見出し（平易な日本語タイトル + 小さく添えた技術 id・バイト数）とチェックボックスを
- * 1行目に、セグメント種別ごとの詳細を本文に持つ（ユーザーフィードバック「個別に消せるなら
- * 一覧は不要」: バレバレの id を並べただけの一覧ではなく、中身が見える形にする）。
+ * メタデータカードのセクション一覧を組み立てる。アコーディオンは持たず、常にすべて展開済みの
+ * 状態で表示する（ユーザーフィードバック「折りたたみを無くし、常時全部見える形にする」）。
+ * 見出しはプレーンなタイトル + 小さく添えた技術 id・バイト数のみとし、除去チェックボックスは
+ * 持たない（セクションまるごとの除去チェックボックスは廃止し、本文のテーブル内の行単位で選ぶ）。
+ * 本文は種別ごとに詳細が変わるが、共通して「削除対象・項目・値・サイズ」の4列テーブルを持つ。
  * checkboxesDisabled は canvas 出力でこの形式（WebP/PNG/AVIF）へ引き継げないケースで使う
  * （選択状態自体は保持したまま、見た目と実際の操作だけを無効化する）。
  * WebP はそもそも除去が未対応なため、format が "webp" のときは常にチェックボックスを
@@ -1054,34 +1125,30 @@ export function buildMetadataSectionsHtml(
 
       let bodyHtml: string;
       if (isExifSegmentName(seg.name)) {
-        bodyHtml = exifTagTableContainerHtml(seg.name);
+        bodyHtml = exifTagTableShellHtml(seg);
       } else if (isIccSegmentName(seg.name)) {
-        bodyHtml = iccBodyHtml(iccProfileInfoForSegment(scan.format, originalArrayBuffer, seg));
+        bodyHtml = iccBodyHtml(iccProfileInfoForSegment(scan.format, originalArrayBuffer, seg), seg, checked, disabled);
       } else if (isXmpSegmentName(seg.name)) {
-        bodyHtml = xmpBodyHtml(xmpInfoForSegment(originalArrayBuffer, seg));
+        bodyHtml = xmpBodyHtml(xmpInfoForSegment(originalArrayBuffer, seg), seg, checked, disabled);
       } else {
         const content = segmentContentPreview(originalArrayBuffer, seg);
-        bodyHtml = content ? `<p class="break-all font-mono text-xs text-muted-foreground">${escapeHtml(content)}</p>` : "";
+        bodyHtml = simpleSegmentBodyHtml(seg, content, checked, disabled);
       }
 
       const mpfNote =
         seg.name === "APP2 MPF"
-          ? `<p class="pb-1 text-xs text-muted-foreground">除去すると MPO の副画像（視差画像など）も一緒に失われます。</p>`
+          ? `<p class="pt-1 text-xs text-muted-foreground">除去すると MPO の副画像（視差画像など）も一緒に失われます。</p>`
           : "";
       const webpNote = webpUnsupported ? `<span class="text-xs text-muted-foreground">（WebP の除去は未対応）</span>` : "";
 
       return (
-        `<details class="border-b border-border/60 py-1.5 last:border-b-0" open>` +
-        `<summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-sm marker:content-none">` +
-        `<span class="flex min-w-0 items-center gap-1.5">` +
-        `<input type="checkbox" class="asshukusan-seg-checkbox accent-primary shrink-0" data-seg-id="${seg.id}"${checked ? " checked" : ""}${disabled ? " disabled" : ""} onclick="event.stopPropagation()" />` +
+        `<div class="border-b border-border/60 py-1.5 last:border-b-0">` +
+        `<div class="flex min-w-0 items-center justify-between gap-3 text-sm">` +
         `<span class="truncate font-semibold text-foreground">${escapeHtml(segmentTitle(seg.name))}</span>` +
-        `<span class="shrink-0 font-mono text-xs text-muted-foreground">${escapeHtml(seg.name)} · ${formatBytes(seg.bytes)}</span>` +
-        `${webpNote}` +
-        `</span>` +
-        `</summary>` +
-        `<div class="pl-6 pt-1">${descriptionHtml}${bodyHtml}${mpfNote}</div>` +
-        `</details>`
+        `<span class="shrink-0 font-mono text-xs text-muted-foreground">${escapeHtml(seg.name)} · ${formatBytes(seg.bytes)}${webpNote ? ` ${webpNote}` : ""}</span>` +
+        `</div>` +
+        `<div class="pt-1">${descriptionHtml}${bodyHtml}${mpfNote}</div>` +
+        `</div>`
       );
     })
     .join("");
@@ -1099,28 +1166,23 @@ export function buildMetadataTotalsHtml(removedBytes: number, keptBytes: number)
 
 /** メタデータカードの状態説明文（複数行になりうる） */
 export function metadataStatusNotes(detail: MetadataStageDetail): string[] {
+  // 出せるのは「なぜ操作が効かないか」だけ。処理の内部説明はカードに載せない
   const notes: string[] = [];
   if (detail.cameFromCanvas) {
-    if (detail.carried) {
-      notes.push("canvas 再エンコード後の JPEG に、元ファイルの Exif/XMP/COM を再挿入しました。向きは 1 に補正済みです（drawImage が向きを反映済みのため）。");
-      if (detail.iccDropped) notes.push("ICC プロファイルは canvas 出力が常に sRGB を吐くため引き継いでいません。");
+    if (detail.carried && detail.iccDropped) {
+      notes.push("再エンコード後は sRGB になるため、ICC プロファイルは引き継ぎません。");
     } else if (detail.carryUnsupported) {
       notes.push("この形式への再エンコードではメタデータは引き継げません。");
-    } else {
-      notes.push("サイズ・フォーマット段で再エンコード済みのため、この段では既にメタデータが失われています。");
+    } else if (!detail.carried) {
+      notes.push("再エンコード済みのため、メタデータは既にありません。");
     }
     return notes;
   }
   if (detail.scan.strippable === false && detail.scan.segments.length > 0) {
-    notes.push("WebP の除去は未対応です（RIFF サイズと VP8X flags の再計算が必要で、安全にロスレス除去できないため）。編集内容は保持したまま元のバイト列を通します。");
-  } else if (detail.removedBytes > 0) {
-    notes.push("元ファイルのバイト列から、選んだセグメントのみをロスレスに読み飛ばして除去しました。");
-  }
-  if (detail.gpsRemoved && detail.scan.segments.some((s) => s.name === "APP1 Exif")) {
-    notes.push("GPS 情報は値をゼロ埋めし、IFD からたどれないようにしました。");
+    notes.push("WebP のメタデータ除去は未対応です。");
   }
   if (detail.tagsRemovedCount > 0) {
-    notes.push("タグ消去はサイズを変えません（値をゼロ埋めして無効化）。サイズを減らすには Exif ごと除去してください。");
+    notes.push("タグ単位の削除はサイズを変えません。サイズを減らすには全タグを削除対象にしてください。");
   }
   return notes;
 }
