@@ -10,7 +10,7 @@ if (!appEl) {
 appEl.innerHTML = `
   <main class="mx-auto flex max-w-2xl flex-col gap-6 px-5 py-10">
     <header class="flex flex-col gap-1.5">
-      <h1 class="font-serif text-2xl font-bold">文字数</h1>
+      <h1 class="font-serif text-2xl font-bold">文字数カウンター</h1>
       <p class="text-sm text-muted-foreground">テキストの文字数を数えます。絵文字も結合文字も1文字として数えます。</p>
     </header>
 
