@@ -52,6 +52,15 @@ const TEXT_PADDING_Y = 80;
 
 const ICON_SIZE = 200;
 
+// title は単語境界の無い日本語なので、幅に収まらないと「文字数カウン / ター」のように
+// 語の途中で折れる。1 行に収まるまで文字サイズを落とし、折り返しを起こさせない。
+// 右端の余白ぶん（satori の字送りは fontSize より少し広い）を差し引いて計算する
+const TITLE_FIT_MARGIN = 40;
+function fitTitleFontSize(title: string, baseFontSize: number, columnWidth: number, paddingX: number): number {
+  const available = columnWidth - paddingX - TITLE_FIT_MARGIN;
+  return Math.min(baseFontSize, Math.floor(available / Array.from(title).length));
+}
+
 // preview 付きは左カラムの幅が半分以下になり、素のテキストサイズのままだと折り返しで
 // 末尾 1 文字だけが次行に落ちるなど読みにくくなるため、二段組のときだけ縮小する
 function TextBlock({
@@ -67,7 +76,9 @@ function TextBlock({
       <span
         style={{
           display: 'flex',
-          fontSize: compact ? 56 : 72,
+          fontSize: compact
+            ? fitTitleFontSize(title, 56, TEXT_COLUMN_WIDTH, TEXT_PADDING_X_COMPACT)
+            : fitTitleFontSize(title, 72, TEXT_COLUMN_WIDTH, TEXT_PADDING_X),
           lineHeight: 1.3,
           color: colors.foreground,
         }}

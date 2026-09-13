@@ -1,0 +1,12 @@
+@layer theme, base, components, utilities;
+
+:root {
+  --background: #f7f6f2;
+  --foreground: #2b2a26;
+  --primary: #3d5a4c;
+  --ring: #3d5a4c;
+  --muted: rgba(61, 90, 76, 0.06);
+  --muted-foreground: #6b6a63;
+  --border: rgba(61, 90, 76, 0.25);
+}
+

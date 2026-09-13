@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "deploy": "vite build && wrangler deploy"
   },
   "devDependencies": {
@@ -16,6 +17,7 @@
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
     "@webgpu/types": "0.1.72",
+    "bun-types": "1.4.1",
     "satori": "0.33.4",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
