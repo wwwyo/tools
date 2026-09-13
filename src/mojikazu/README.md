@@ -39,7 +39,7 @@ mojikazu/
 ├── main.ts         UI・イベントハンドリング
 ├── count.ts         集計ロジック（DOM非依存の純関数）
 ├── count.test.ts    count.ts のテスト
-├── styles.css       配色・textarea の原稿用紙風罫線
+├── styles.css       配色（theme 変数の override のみ）
 └── og.tsx           OGP画像用の画面ミニチュア
 ```
 

@@ -10,16 +10,3 @@
   --border: rgba(61, 90, 76, 0.25);
 }
 
-@layer components {
-  /* textarea は原稿用紙のマス目を思わせる罫線を等間隔の縦グラデーションで表現する */
-  #text-input {
-    background-image: repeating-linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent calc(1.6em - 1px),
-      var(--border) calc(1.6em - 1px),
-      var(--border) 1.6em
-    );
-    line-height: 1.6em;
-  }
-}

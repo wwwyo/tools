@@ -17,9 +17,8 @@ appEl.innerHTML = `
     <div class="flex flex-col gap-2">
       <textarea
         id="text-input"
-        rows="10"
         placeholder="ここにテキストを入力・貼り付け"
-        class="w-full resize-y rounded border border-border bg-background px-3 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        class="w-full min-h-40 field-sizing-content resize-none rounded border border-border bg-background px-3 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
       ></textarea>
       <p id="privacy-notice" class="rounded border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-bold text-primary">
         入力したテキストはこのページ内だけで処理され、サーバーや外部に一切送信されません（通信ゼロ）
