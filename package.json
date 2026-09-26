@@ -12,17 +12,17 @@
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",
     "@tailwindcss/vite": "4.3.3",
-    "@types/node": "26.5.1",
+    "@types/node": "26.6.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
-    "@webgpu/types": "0.1.72",
+    "@webgpu/types": "0.1.74",
     "bun-types": "1.4.2",
     "satori": "0.33.4",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.3.0",
-    "wrangler": "4.131.1"
+    "wrangler": "4.135.0"
   },
   "dependencies": {
     "@fontsource/sawarabi-gothic": "5.3.1",
