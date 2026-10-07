@@ -15,6 +15,10 @@ description: tools リポジトリに新しいツールを追加するときの�
 - `og:title` / `og:description`（`ogPlugin`）
 - OGP 画像に描画される文字（`src/og/template.tsx`）
 
+### 静的な説明文を `<div id="app">` の外に置く
+
+このサイトは CSR なので body が空の `#app` しか持たず、index 登録が遅い・薄いコンテンツ判定になる。`index.html` にツールの説明テキストを書くときは **`#app` / `#root` の外（兄弟要素）**に置く — 中に書くと `main.ts` の `appEl.innerHTML =` / `createRoot().render()` で起動直後に上書きされて消える。SEO・インデックス周りの詳細は `docs/indexing.md` を参照。
+
 ### description に使える文字の制約
 
 OGP のフォントは Sawarabi Gothic の japanese サブセット 1 本だけで、**フォールバックフォントを積んでいない**。このサブセットが持たない漢字は OGP 画像で tofu (□) になる。
