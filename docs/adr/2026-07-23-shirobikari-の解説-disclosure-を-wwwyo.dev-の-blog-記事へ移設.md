@@ -1,4 +1,4 @@
-# shirobikari の解説 disclosure を [wwwyo.dev の blog 記事](https://github.com/wwwyo/me/blob/main/wiki/life/wwwyo-dev.md)へ移設
+# shirobikari の解説 disclosure を [wwwyo.dev の blog 記事](https://wwwyo.dev/blog/why-hdr-looks-brighter/)へ移設
 
 - Status: Accepted
 - Date: 2026-07-23
