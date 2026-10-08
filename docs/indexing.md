@@ -4,7 +4,7 @@ tools.wwwyo.dev のページが Google にインデックスされない事象�
 
 ## 前提：このサイトのレンダリング形態
 
-Vite MPA の CSR で、各ツールの `src/<appdir>/index.html` に含まれる body は空の `<div id="app">`（React ツールは `#root`）と script タグだけで、全コンテンツは JS が DOM 構築した後に現れる。生 HTML の body は「どんなページか」をほとんど伝えない（実測 74 文字以下）。Googlebot は evergreen Chromium で CSR を描画できるが、描画キューで後回しになるので新規・低権威サイトでは「描画待ち」で長い間未索引のままになりうる。
+Vite MPA の CSR で、各ツールの `src/<appdir>/index.html` に含まれる body は空の `<div id="app">`（React ツールは `#root`）と script タグだけで、全コンテンツは JS が DOM 構築した後に現れる。生 HTML の body は「どんなページか」をほとんど伝えない（実測 74 文字台）。Googlebot は evergreen Chromium で CSR を描画できるが、描画キューで後回しになるので新規・低権威サイトでは「描画待ち」で長い間未索引のままになりうる。
 
 ## まず確認する（全部で 5 分で見られる）
 
@@ -12,10 +12,10 @@ Vite MPA の CSR で、各ツールの `src/<appdir>/index.html` に含まれる
 |------|------|--------|
 | HTTP ステータス | `curl -I <url>` | 200。403/503 なら bot 遮断系を疑う |
 | robots.txt | `curl <url>/robots.txt` | `User-agent: *` + `Allow: /`。Disallow: / があればそれが原因 |
-| sitemap.xml | `curl <url>/sitemap.xml` | 全 page の URL が入って lastmod が更新されている |
+| sitemap.xml | `curl <url>/sitemap.xml` | 全 page の URL が入っていること。lastmod は各ツール dir の最終コミット日で、git log が取れない環境では省略される |
 | noindex | `curl -s <url> \| rg -i 'noindex\|robots'` | 無いこと。X-Robots-Tag ヘッダも確認 |
 | canonical | `curl -s <url> \| rg 'rel="canonical"'` | 自 page を指していること（他 URL への canonical は正規化で弾かれる） |
-| 描画後の文字数 | Playwright / Puppeteer 等の headless browser で描画後の `document.body.innerText` を取る（repo 内の環境なら Orca 内蔵ブラウザで `orca tab create --url <url>` → `orca eval --expression "document.body.innerText"`、または agent-browser skill） | 数百〜数千文字あること。**74 文字前後だと「このページが何か」が伝わっていない** = thin content |
+| 描画後の文字数 | Playwright / Puppeteer 等の headless browser で描画後の `document.body.innerText` を取る（repo 内の環境なら Orca 内蔵ブラウザで `orca tab create --url <url>` → `orca eval --expression "document.body.innerText"`、または agent-browser skill） | 目安として数百文字以上あること。**74 文字台だと「このページが何か」を伝えられていない疑い**（thin content の可能性） |
 | Cloudflare の bot 設定 | `cf zones settings get security_level -z wwwyo.dev` で Under Attack mode を確認（ダッシュボード: Security → Settings）。Bot Fight Mode は別設定で `cf` からは読めないので、ダッシュボードの Security → Bots を見る | `security_level` が `under_attack` だとインタースティシャルチャレンジが表示され、Googlebot のクロールや indexing を妨げる可能性がある。Googlebot が challenge または block されるかは Security Events で確認する。Bot Fight Mode は verified bot である Googlebot を通常素通りさせるが、誤判定がありうる |
 | Search Console | URL Inspection → coverage state | `Discovered – currently not indexed` は発見済み・未クロール（まだ中身を見ていない）。`Crawled – currently not indexed` はクロール・評価済みで未採用 |
 
