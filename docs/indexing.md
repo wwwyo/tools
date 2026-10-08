@@ -6,20 +6,20 @@ tools.wwwyo.dev のページが Google にインデックスされない事象�
 
 Vite MPA の CSR で、各ツールの `src/<appdir>/index.html` に含まれる body は空の `<div id="app">`（React ツールは `#root`）と script タグだけで、全コンテンツは JS が DOM 構築した後に現れる。生 HTML の body は「どんなページか」をほとんど伝えない（実測 74 文字以下）。Googlebot は evergreen Chromium で CSR を描画できるが、描画キューで後回しになるので新規・低権威サイトでは「描画待ち」で長い間未索引のままになりうる。
 
-## まず確認する（全部で 5 分で見れる）
+## まず確認する（全部で 5 分で見られる）
 
 | 確認 | 方法 | 期待値 |
 |------|------|--------|
 | HTTP ステータス | `curl -I <url>` | 200。403/503 なら bot 遮断系を疑う |
 | robots.txt | `curl <url>/robots.txt` | `User-agent: *` + `Allow: /`。Disallow: / があればそれが原因 |
 | sitemap.xml | `curl <url>/sitemap.xml` | 全 page の URL が入って lastmod が更新されている |
-| noindex | `curl -s <url> | rg -i 'noindex|robots'` | 無いこと。X-Robots-Tag ヘッダも確認 |
-| canonical | `curl -s <url> | rg 'rel="canonical"'` | 自 page を指していること（他 URL への canonical は正規化で弾かれる） |
-| 描画後の文字数 | headless browser（`orca browser` or agent-browser skill）で body.innerText を取る | 数百〜数千文字あること。**74 文字前後だと「このページが何か」が伝わっていない** = thin content |
-| Cloudflare の bot 設定 | `cf zone get` で fight_mode（Under Attack）が off か | true だと JS challenge が出て Googlebot が弾かれる |
-| Search Console | URL Inspection → coverage state | `Discovered – currently not indexed` は発見済みで描画・評価待ち。`Crawled – currently not indexed` は評価済みで未採用 |
+| noindex | `curl -s <url> \| rg -i 'noindex\|robots'` | 無いこと。X-Robots-Tag ヘッダも確認 |
+| canonical | `curl -s <url> \| rg 'rel="canonical"'` | 自 page を指していること（他 URL への canonical は正規化で弾かれる） |
+| 描画後の文字数 | Playwright / Puppeteer 等の headless browser で描画後の `document.body.innerText` を取る（repo 内の環境なら Orca 内蔵ブラウザで `orca tab create --url <url>` → `orca eval --expression "document.body.innerText"`、または agent-browser skill） | 数百〜数千文字あること。**74 文字前後だと「このページが何か」が伝わっていない** = thin content |
+| Cloudflare の bot 設定 | `cf zones settings get security_level -z wwwyo.dev`（ダッシュボードなら Security → Settings） | `under_attack`（Under Attack mode）だと JS challenge が出て Googlebot が弾かれる。`medium` 等なら問題なし |
+| Search Console | URL Inspection → coverage state | `Discovered – currently not indexed` は発見済み・未クロール（まだ中身を見ていない）。`Crawled – currently not indexed` はクロール・評価済みで未採用 |
 
-`Discovered – currently not indexed` で描画後文字数も 74 文字台なら、「CSR が弾かれた」ではなく「権威の無い新サイトの描画優先度が低い + thin content」が本命。待てば入るが、静的テキストを足す方が早い（下記）。
+`Discovered – currently not indexed` はまだクロールされていない状態で、Google はこの時点ではコンテンツを評価していない（描画待ちや評価待ちではなく、クロールのスケジュール待ち）。`Crawled – currently not indexed` になって初めて「評価されたが未採用」と読める。いずれにせよ生 HTML が 74 文字台のままでは、描画されても thin content と見なされるリスクが高いので、静的テキストを足す方が早い（下記）。
 
 ## 静的テキストを足すとき：マウント root の外に置く
 
@@ -27,7 +27,7 @@ Vite MPA の CSR で、各ツールの `src/<appdir>/index.html` に含まれる
 
 静的テキストを残すには2択：
 
-- **マウント root の外（兄弟要素）に置く** — `<div id="app">` と並列の `<section>` 等。JS 起動後も DOM に残る。CSS で `position: absolute; left: -9999px` 等の visual-hidden にすれば見た目を変えずに crawlable text だけ残せる（Google は display:none より visually-hidden を許容する傾向。隠しテキスト判定を避けるため内容は page の実体をそのまま書く）
+- **マウント root の外（兄弟要素）に置く** — `<div id="app">` と並列の `<section>` 等。JS 起動後も DOM に残る。基本はユーザーにも見える説明文として置くのが安全。どうしても視覚的に出せない場合は、screen reader 向けテキストと同じ `.sr-only` パターン（`position: absolute`・1px サイズ・`clip-path: inset(50%)`・`overflow: hidden`）を使う。ただし検索エンジンだけに見せるテキストは Google の spam policy 上の hidden text に該当しうるので、screen reader 利用者にも読まれ、かつ内容が page の実体と同一の場合に限る
 - **`transformIndexHtml` で page ごとにマウント root の前後へ注入** — `vite.config.ts` に per-page の inject plugin を足すとツールの HTML を触らずに全ページへ載せられる
 
 やってはいけないのは、Googlebot だけに別 HTML を返す UA ベースの cloaking（policy 違反）。全ユーザーに同じ HTML を返し、JS が起きたら app が引き継ぐ形にする。
