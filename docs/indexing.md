@@ -16,7 +16,7 @@ Vite MPA の CSR で、各ツールの `src/<appdir>/index.html` に含まれる
 | noindex | `curl -s <url> \| rg -i 'noindex\|robots'` | 無いこと。X-Robots-Tag ヘッダも確認 |
 | canonical | `curl -s <url> \| rg 'rel="canonical"'` | 自 page を指していること（他 URL への canonical は正規化で弾かれる） |
 | 描画後の文字数 | Playwright / Puppeteer 等の headless browser で描画後の `document.body.innerText` を取る（repo 内の環境なら Orca 内蔵ブラウザで `orca tab create --url <url>` → `orca eval --expression "document.body.innerText"`、または agent-browser skill） | 数百〜数千文字あること。**74 文字前後だと「このページが何か」が伝わっていない** = thin content |
-| Cloudflare の bot 設定 | `cf zones settings get security_level -z wwwyo.dev` で Under Attack mode を確認（ダッシュボード: Security → Settings）。Bot Fight Mode は別設定で `cf` からは読めないので、ダッシュボードの Security → Bots を見る | `security_level` が `under_attack` だと全リクエストに JS challenge が出て Googlebot も弾かれる。Bot Fight Mode は verified bot である Googlebot を通常素通りさせるが、誤判定がありうる |
+| Cloudflare の bot 設定 | `cf zones settings get security_level -z wwwyo.dev` で Under Attack mode を確認（ダッシュボード: Security → Settings）。Bot Fight Mode は別設定で `cf` からは読めないので、ダッシュボードの Security → Bots を見る | `security_level` が `under_attack` だとインタースティシャルチャレンジが表示され、Googlebot のクロールや indexing を妨げる可能性がある。Googlebot が challenge または block されるかは Security Events で確認する。Bot Fight Mode は verified bot である Googlebot を通常素通りさせるが、誤判定がありうる |
 | Search Console | URL Inspection → coverage state | `Discovered – currently not indexed` は発見済み・未クロール（まだ中身を見ていない）。`Crawled – currently not indexed` はクロール・評価済みで未採用 |
 
 `Discovered – currently not indexed` はまだクロールされていない状態で、Google はこの時点ではコンテンツを評価していない（描画待ちや評価待ちではなく、クロールのスケジュール待ち）。`Crawled – currently not indexed` になって初めて「評価されたが未採用」と読める。いずれにせよ生 HTML が 74 文字台のままでは、描画されても thin content と見なされるリスクが高いので、静的テキストを足す方が早い（下記）。
