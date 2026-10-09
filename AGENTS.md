@@ -32,7 +32,7 @@ tools/
 ├── vite.config.ts   Vite 設定（src/<appdir>/index.html を自動検出）
 ├── tsconfig.json    TypeScript 設定（jsx: "react-jsx" 含む）
 ├── wrangler.jsonc   Cloudflare Workers static assets 設定（dist/ を参照）
-├── mise.toml        ツール管理（bun）
+├── mise.toml        ツール管理（bun・Node.js）
 └── bunfig.toml      exact install + 7day cooldown
 ```
 
@@ -41,7 +41,7 @@ tools/
 ツールは mise で管理している。
 
 ```bash
-mise install   # bun をインストール
+mise install   # bun と Node.js をインストール
 bun install    # wrangler をインストール
 ```
 
@@ -63,3 +63,8 @@ bun run dev      # ローカル開発サーバ（Vite dev）
 
 - Vite 設定・ビルド時生成・TSX 動的読み込みの学びは `.agents/skills/coding/`（session-retro が維持）を参照
 
+## Pullfrog
+
+設定の正本は [`.github/pullfrog.config.sh`](.github/pullfrog.config.sh)。初回レビューと追加コミットの再レビューは自動で行う。手動レビューも `@pullfrog` で依頼できる。
+
+ブラウザの E2E は `test:e2e` で実行する。`e2e.config.ts` がローカルサーバーを起動し、OpenCode Go の認証は mise の環境変数から読む。

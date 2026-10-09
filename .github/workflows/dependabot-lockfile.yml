@@ -1,0 +1,30 @@
+name: dependabot-lockfile
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+permissions:
+  contents: write
+concurrency:
+  group: dependabot-lockfile-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  regenerate:
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5.0.1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - run: bun install --lockfile-only --ignore-scripts
+      - name: Commit a changed lockfile
+        run: |
+          if git diff --quiet -- bun.lock; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bun.lock
+          git commit -m 'build(deps): regenerate lockfile'
+          git push
