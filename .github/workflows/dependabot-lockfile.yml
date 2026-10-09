@@ -12,6 +12,7 @@ jobs:
     if: github.actor == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
+      # Resolve tools from the trusted base before loading the Dependabot manifest.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -19,6 +20,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
       - run: bun install --lockfile-only --ignore-scripts
       - name: Commit a changed lockfile
+        env:
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           if git diff --quiet -- bun.lock; then
             exit 0
@@ -27,4 +30,4 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add bun.lock
           git commit -m 'build(deps): regenerate lockfile'
-          git push
+          git push origin "HEAD:${PR_HEAD_REF}"
