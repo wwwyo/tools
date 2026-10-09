@@ -51,7 +51,14 @@ pf_set fix-ci.reviewed-prs 'false'
 # only some of the files exist, and pipefail would turn that into a false negative.
 ls mise.toml .mise.toml .config/mise.toml 2>/dev/null | grep -q . || exit 0
 set -euo pipefail
-command -v mise >/dev/null 2>&1 || curl -fsSL https://mise.run | sh
+if ! command -v mise >/dev/null 2>&1; then
+  # v2026.10.0 was released on 2026-10-02; verify the pinned installer before running it.
+  mise_installer=$(mktemp)
+  trap 'rm -f "$mise_installer"' EXIT
+  curl -fsSL https://github.com/jdx/mise/releases/download/v2026.10.0/install.sh -o "$mise_installer"
+  printf '41743b1036070d01e37a6eab45fab283766029c6ae7da1c394a0b1c593b28be3  %s\n' "$mise_installer" | sha256sum --check -
+  MISE_VERSION=v2026.10.0 sh "$mise_installer"
+fi
 export PATH="$HOME/.local/bin:$PATH"
 mise trust -a 2>/dev/null || true
 mise install -y
