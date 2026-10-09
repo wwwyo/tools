@@ -63,3 +63,6 @@ bun run dev      # ローカル開発サーバ（Vite dev）
 
 - Vite 設定・ビルド時生成・TSX 動的読み込みの学びは `.agents/skills/coding/`（session-retro が維持）を参照
 
+## Pullfrog
+
+設定の正本は [`.github/pullfrog.config.sh`](.github/pullfrog.config.sh)。初回レビューと追加コミットの再レビューは自動で行う。手動レビューも `@pullfrog` で依頼できる。
