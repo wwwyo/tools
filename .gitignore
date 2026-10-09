@@ -6,4 +6,3 @@ node_modules/
 .wrangler/
 *.local.*
 dist/
-.e2e/

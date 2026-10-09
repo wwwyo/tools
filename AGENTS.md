@@ -32,7 +32,7 @@ tools/
 ├── vite.config.ts   Vite 設定（src/<appdir>/index.html を自動検出）
 ├── tsconfig.json    TypeScript 設定（jsx: "react-jsx" 含む）
 ├── wrangler.jsonc   Cloudflare Workers static assets 設定（dist/ を参照）
-├── mise.toml        ツール管理（bun・Node.js）
+├── mise.toml        ツール管理（bun）
 └── bunfig.toml      exact install + 7day cooldown
 ```
 
@@ -41,7 +41,7 @@ tools/
 ツールは mise で管理している。
 
 ```bash
-mise install   # bun と Node.js をインストール
+mise install   # bun をインストール
 bun install    # wrangler をインストール
 ```
 
@@ -66,13 +66,3 @@ bun run dev      # ローカル開発サーバ（Vite dev）
 ## Pullfrog
 
 設定の正本は [`.github/pullfrog.config.sh`](.github/pullfrog.config.sh)。初回レビューと追加コミットの再レビューは自動で行う。手動レビューも `@pullfrog` で依頼できる。
-
-ブラウザの E2E は `test:e2e` で実行する。`e2e.config.ts` がローカルサーバーを起動し、OpenCode Go の認証は mise の環境変数から読む。
-
-E2E の実行には `OPENCODE_API_KEY` と `OPENCODE_E2E_MODEL` が必要。共有 dotfiles の mise 設定を使う環境では、Keychain の age key を読み込んで `mise exec` から実行する。共有設定を使わない環境では、自分の OpenCode Go key を mise+age で管理し、利用可能な model ID を `OPENCODE_E2E_MODEL` に設定する。秘密は repo に保存しない。
-
-```sh
-MISE_AGE_KEY="$(security find-generic-password -a "$USER" -s mise-age-key -w)" mise exec -- bun run test:e2e
-```
-
-Keychain の例は macOS 用。ほかの環境では age key を既存の秘密管理からプロセスに渡す。
