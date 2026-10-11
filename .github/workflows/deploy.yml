@@ -18,7 +18,7 @@ jobs:
           # 掲載日 (toolPublishedAt) / sitemap の lastmod を git log から引くため、
           # shallow clone だと全ツールがデプロイ日で上書きされてしまう
           fetch-depth: 0
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
       - run: bun install --frozen-lockfile
       - run: bun run deploy
         env:
