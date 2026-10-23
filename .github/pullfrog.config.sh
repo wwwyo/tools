@@ -20,8 +20,8 @@ pf_unset() { "${PF[@]}" config unset "$1"     --repo "$REPO" --yes; }
 
 
 pf_set enabled 'true'
-pf_set model 'opencode-go/minimax-m3.1-flash-free'
-pf_set effort '1'
+pf_unset model   # inherit org default (wwwyo/dotfiles .github/pullfrog.org.config.sh); pf_set here to override
+pf_unset effort  # inherit org default
 pf_set progress-comments 'true'
 pf_set oss 'true'
 pf_set push 'enabled'
