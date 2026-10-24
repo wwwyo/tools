@@ -18,17 +18,17 @@
     "@vitejs/plugin-react": "6.1.2",
     "@webgpu/types": "0.1.74",
     "bun-types": "1.4.3",
-    "satori": "0.47.1",
+    "satori": "0.62.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.3.4",
-    "wrangler": "4.149.0"
+    "wrangler": "4.151.1"
   },
   "dependencies": {
     "@fontsource/sawarabi-gothic": "5.3.1",
     "@fontsource/sawarabi-mincho": "5.3.0",
     "@jsquash/avif": "2.1.1",
-    "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   }
 }
