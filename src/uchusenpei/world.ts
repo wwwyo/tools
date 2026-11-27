@@ -1,17 +1,19 @@
 // 台本の objects を three.js の物に組み立てる。
-// 物ごとに「level（0〜1 の見え方・明るさ）」と「start（その物の動きを始める）」の 2 つだけを外に出し、
-// 台本の timeline はこの 2 つと字幕だけで場面を進める。
+// 物は render(state) だけを持ち、見た目を「その時刻の状態」だけから決める（前のフレームに依存しない）。
+// state は timeline.ts が台本から計算する: 台本の時刻 t、見え方 level（0〜1）、直近の start からの経過 since。
 
 import * as THREE from 'three';
 import type { ObjectSpec, Vec3 } from './script';
 import { makeEarthTexture, makeMoonTextures, mulberry32 } from './textures';
+import type { ActorState } from './timeline';
 
 export type Actor = {
   object: THREE.Object3D;
-  applyLevel?: (level: number) => void;
-  start?: (dur: number) => void;
-  update?: (dt: number) => void;
+  render?: (state: ActorState) => void;
 };
+
+// start からの進み具合（0〜1）。まだ始まっていなければ 0
+const progress = (s: ActorState) => (s.since === null ? 0 : Math.min(s.since / s.dur, 1));
 
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 const smooth = (t: number) => t * t * (3 - 2 * t);
@@ -79,13 +81,14 @@ function moon(spec: Extract<ObjectSpec, { type: 'moon' }>): Actor {
   });
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(spec.radius, 96, 64), material);
   mesh.position.copy(v3(spec.position));
-  mesh.rotation.y = -0.6;
   // level は月の明るさ（展望室で見えてくる）
-  const applyLevel = (level: number) => {
-    material.color.setScalar(0.25 + 0.75 * level);
+  return {
+    object: mesh,
+    render: (s) => {
+      material.color.setScalar(0.25 + 0.75 * s.level);
+      mesh.rotation.y = -0.6 + s.t * 0.004;
+    },
   };
-  applyLevel(spec.level ?? 1);
-  return { object: mesh, applyLevel, update: (dt) => (mesh.rotation.y += dt * 0.004) };
 }
 
 function earth(spec: Extract<ObjectSpec, { type: 'earth' }>): Actor {
@@ -98,7 +101,7 @@ function earth(spec: Extract<ObjectSpec, { type: 'earth' }>): Actor {
     new THREE.MeshBasicMaterial({ color: 0x6fa8ff, transparent: true, opacity: 0.18, side: THREE.BackSide }),
   );
   mesh.add(glow);
-  return { object: mesh, update: (dt) => (mesh.rotation.y += dt * 0.02) };
+  return { object: mesh, render: (s) => (mesh.rotation.y = s.t * 0.02) };
 }
 
 function label(text: string, color: string): THREE.Sprite {
@@ -139,11 +142,7 @@ function forceArrows(spec: Extract<ObjectSpec, { type: 'forceArrows' }>): Actor 
   });
   for (const m of materials) m.transparent = true;
 
-  let balance = spec.balance;
-  let from = balance;
-  let elapsed = 0;
-  let dur = 0;
-  const layout = () => {
+  const layout = (balance: number) => {
     // balance=0 で地球側が最大・月側が最小、balance=1 で同じ長さ
     const earthLen = spec.maxLength * (1 - 0.45 * balance);
     const moonLen = spec.maxLength * (0.2 + 0.35 * balance);
@@ -152,26 +151,12 @@ function forceArrows(spec: Extract<ObjectSpec, { type: 'forceArrows' }>): Actor 
     earthLabel.position.copy(origin).addScaledVector(toEarth, earthLen + 0.25);
     moonLabel.position.copy(origin).addScaledVector(toMoon, moonLen + 0.25);
   };
-  layout();
-  const applyLevel = (level: number) => {
-    for (const m of materials) m.opacity = level;
-    group.visible = level > 0.001;
-  };
-  applyLevel(spec.level ?? 1);
   return {
     object: group,
-    applyLevel,
-    start: (d) => {
-      from = balance;
-      elapsed = 0;
-      dur = Math.max(d, 0.01);
-    },
-    update: (dt) => {
-      if (dur === 0) return;
-      elapsed = Math.min(elapsed + dt, dur);
-      balance = from + (1 - from) * smooth(elapsed / dur);
-      layout();
-      if (elapsed >= dur) dur = 0;
+    render: (s) => {
+      for (const m of materials) m.opacity = s.level;
+      group.visible = s.level > 0.001;
+      layout(spec.balance + (1 - spec.balance) * smooth(progress(s)));
     },
   };
 }
@@ -210,19 +195,11 @@ function cabinItems(spec: Extract<ObjectSpec, { type: 'cabinItems' }>): Actor {
     return { mesh, base, rise: item.kind === 'frame' ? 0 : 0.18 + i * 0.07, spin: (i + 1) * 0.25 };
   });
 
-  let elapsed = 0;
-  let dur = 0;
   return {
     object: group,
-    start: (d) => {
-      elapsed = 0;
-      dur = Math.max(d, 0.01);
-    },
-    update: (dt) => {
-      if (dur === 0) return;
-      elapsed = Math.min(elapsed + dt, dur);
+    render: (s) => {
       // 減速しながら上がり、止まる
-      const k = 1 - Math.pow(1 - elapsed / dur, 3);
+      const k = 1 - Math.pow(1 - progress(s), 3);
       for (const it of items) {
         it.mesh.position.y = it.base.y + it.rise * k;
         it.mesh.rotation.x = it.spin * k * 0.6;
@@ -274,8 +251,7 @@ function debrisField(spec: Extract<ObjectSpec, { type: 'debrisField' }>): Actor 
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const scale = new THREE.Vector3();
-  let time = 0;
-  const write = () => {
+  const write = (time: number) => {
     for (const [i, r] of rocks.entries()) {
       // 「並んでしずかに動いている」: 横へゆっくり流れ、端まで行ったら反対側へ戻る
       const half = spec.spread[0] / 2;
@@ -287,14 +263,7 @@ function debrisField(spec: Extract<ObjectSpec, { type: 'debrisField' }>): Actor 
     }
     mesh.instanceMatrix.needsUpdate = true;
   };
-  write();
-  return {
-    object: mesh,
-    update: (dt) => {
-      time += dt;
-      write();
-    },
-  };
+  return { object: mesh, render: (s) => write(s.t) };
 }
 
 function searchlight(spec: Extract<ObjectSpec, { type: 'searchlight' }>): Actor {
@@ -324,12 +293,13 @@ function searchlight(spec: Extract<ObjectSpec, { type: 'searchlight' }>): Actor 
   beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), to.clone().sub(from).normalize());
   group.add(beam);
 
-  const applyLevel = (level: number) => {
-    light.intensity = spec.intensity * level;
-    beamMaterial.opacity = 0.05 * level;
+  return {
+    object: group,
+    render: (s) => {
+      light.intensity = spec.intensity * s.level;
+      beamMaterial.opacity = 0.05 * s.level;
+    },
   };
-  applyLevel(spec.level ?? 1);
-  return { object: group, applyLevel };
 }
 
 // 艇から放り出す物。初速を持って出ていき、平衡点で減速してその場に止まる
@@ -354,37 +324,22 @@ function throwables(spec: Extract<ObjectSpec, { type: 'throwables' }>): Actor {
       .add(new THREE.Vector3((rand() - 0.5) * 30, (rand() - 0.5) * 6, (rand() - 0.5) * 20));
     const dir = target.sub(from).normalize();
     const speed = spec.speed[0] + rand() * (spec.speed[1] - spec.speed[0]);
-    return { mesh, velocity: dir.multiplyScalar(speed), delay: 0, spin: new THREE.Vector3(rand(), rand(), rand()), age: -1 };
+    return { mesh, velocity: dir.multiplyScalar(speed), spin: new THREE.Vector3(rand(), rand(), rand()) };
   });
   const k = 0.12; // 減速の強さ。到達距離は speed / k
-  let dur = 0;
-  let elapsed = 0;
   return {
     object: group,
-    start: (d) => {
-      dur = Math.max(d, 0.01);
-      elapsed = 0;
+    render: (s) => {
       items.forEach((it, i) => {
-        it.delay = (i / items.length) * dur;
-        it.age = -1;
-        it.mesh.visible = false;
-      });
-    },
-    update: (dt) => {
-      if (dur === 0) return;
-      elapsed += dt;
-      for (const it of items) {
-        if (elapsed < it.delay) continue;
-        if (it.age < 0) {
-          it.age = 0;
-          it.mesh.visible = true;
-        }
-        it.age += dt;
-        const travelled = (1 - Math.exp(-k * it.age)) / k;
+        // start の長さのあいだに 1 つずつ放り出す
+        const age = s.since === null ? -1 : s.since - (i / items.length) * s.dur;
+        it.mesh.visible = age >= 0;
+        if (age < 0) return;
+        const travelled = (1 - Math.exp(-k * age)) / k;
         it.mesh.position.copy(from).addScaledVector(it.velocity, travelled);
         // 回転も移動と一緒に止まる
         it.mesh.rotation.set(it.spin.x * travelled * 0.2, it.spin.y * travelled * 0.2, it.spin.z * travelled * 0.2);
-      }
+      });
     },
   };
 }
