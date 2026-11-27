@@ -6,12 +6,34 @@
     "chapters": ["重力平衡圏", "宇宙の墓地", "展望室"],
     "url": "https://www.aozora.gr.jp/cards/000160/card3355.html"
   },
-  "note": "視点は艇の展望室（原点）で、正面が -z。大きさは本文の印象（月面が手にとるように見える）に合わせた演出で、実際の平衡点からの見え方（月は約3.4度、地球は約2.2度）より月を大きくしている。",
+  "note": "視点は艇の展望室（原点）で、正面が -z。大きさは本文の印象（月面が手にとるように見える）に合わせた演出で、実際の平衡点からの見え方（月は約3.4度、地球は約2.2度）より月を大きくしている。beats は文ごとの区切り。前の文が終わると次の文が始まる。seconds は読み上げの目安で、読み上げを入れたときは声が終わるまで次へ進まない。actions の at は文の頭からの秒。",
   "objects": [
-    { "id": "stars", "type": "stars", "count": 2400, "radius": 900, "seed": 7 },
-    { "id": "sun", "type": "sunlight", "direction": [1, 0.25, 0.15], "intensity": 2.4 },
-    { "id": "moon", "type": "moon", "position": [70, 95, -460], "radius": 52, "level": 0.25 },
-    { "id": "earth", "type": "earth", "position": [-50, -25, 470], "radius": 8 },
+    {
+      "id": "stars",
+      "type": "stars",
+      "count": 2400,
+      "radius": 900,
+      "seed": 7
+    },
+    {
+      "id": "sun",
+      "type": "sunlight",
+      "direction": [1, 0.25, 0.15],
+      "intensity": 2.4
+    },
+    {
+      "id": "moon",
+      "type": "moon",
+      "position": [70, 95, -460],
+      "radius": 52,
+      "level": 0.25
+    },
+    {
+      "id": "earth",
+      "type": "earth",
+      "position": [-50, -25, 470],
+      "radius": 8
+    },
     {
       "id": "forces",
       "type": "forceArrows",
@@ -27,9 +49,18 @@
       "type": "cabinItems",
       "table": [0, -0.5, -0.95],
       "items": [
-        { "kind": "book", "position": [-0.18, -0.47, -0.92] },
-        { "kind": "ashtray", "position": [0.16, -0.48, -0.85] },
-        { "kind": "frame", "position": [0.75, 0.15, -1.3] }
+        {
+          "kind": "book",
+          "position": [-0.18, -0.47, -0.92]
+        },
+        {
+          "kind": "ashtray",
+          "position": [0.16, -0.48, -0.85]
+        },
+        {
+          "kind": "frame",
+          "position": [0.75, 0.15, -1.3]
+        }
       ]
     },
     {
@@ -62,25 +93,143 @@
       "seed": 3
     }
   ],
-  "timeline": [
-    { "t": 0, "do": "caption", "chapter": "重力平衡圏", "text": "（艇は地球と月のあいだを、月へ向かって進む）" },
-    { "t": 1, "do": "level", "target": "forces", "to": 1, "dur": 2 },
-    { "t": 4, "do": "caption", "text": "本艇は今地球からも引張られ、月からも引張られている。" },
-    { "t": 11, "do": "start", "target": "forces", "dur": 9 },
-    { "t": 11, "do": "caption", "text": "その距離の自乗に反比例して、重力は小さくなっていくのだ。" },
-    { "t": 20, "do": "caption", "text": "（二つの引力がつり合うところ、それが重力平衡圏）" },
-    { "t": 24, "do": "level", "target": "forces", "to": 0, "dur": 3 },
-    { "t": 25, "do": "start", "target": "cabin", "dur": 6 },
-    { "t": 25, "do": "caption", "text": "そのときは、本を上へ放り上げても、下へおちてこないで、空間の或るところにじっと停ってしまう。" },
-    { "t": 36, "do": "caption", "chapter": "展望室", "text": "月面は青白く輝き、くっきり黒い影でふちをとられた山岳や谿谷が手にとるようにありありと見えた。" },
-    { "t": 36, "do": "level", "target": "moon", "to": 1, "dur": 5 },
-    { "t": 46, "do": "caption", "text": "月世界の外の空間は全く暗黒であったが、その中に無数の星が寒そうな光を放って輝いていた。" },
-    { "t": 55, "do": "level", "target": "searchlight", "to": 1, "dur": 4 },
-    { "t": 55, "do": "caption", "chapter": "宇宙の墓地", "text": "探照灯は本艇が出しているのだが、あの青白い光の中に黒い小山のようなものが並んでしずかに動いているのが見えるだろう。" },
-    { "t": 67, "do": "caption", "text": "宇宙をとんでいる隕石などが、地球と月との引力の平衡点に吸込まれて、あのように堆積するのだ。" },
-    { "t": 78, "do": "start", "target": "jettison", "dur": 8 },
-    { "t": 78, "do": "caption", "text": "本艇から、いろいろな物を外へ放り出しているのが見えるだろう" },
-    { "t": 92, "do": "caption", "text": "（ここまで。見回して、地球は後ろにある）" },
-    { "t": 100, "do": "end" }
+  "beats": [
+    {
+      "id": "b01",
+      "chapter": "重力平衡圏",
+      "text": "（艇は地球と月のあいだを、月へ向かって進む）",
+      "quote": false,
+      "seconds": 4,
+      "actions": [
+        {
+          "at": 1,
+          "do": "level",
+          "target": "forces",
+          "to": 1,
+          "dur": 2
+        }
+      ]
+    },
+    {
+      "id": "b02",
+      "chapter": "重力平衡圏",
+      "text": "本艇は今地球からも引張られ、月からも引張られている。",
+      "quote": true,
+      "seconds": 7
+    },
+    {
+      "id": "b03",
+      "chapter": "重力平衡圏",
+      "text": "その距離の自乗に反比例して、重力は小さくなっていくのだ。",
+      "quote": true,
+      "seconds": 9,
+      "actions": [
+        {
+          "at": 0,
+          "do": "start",
+          "target": "forces",
+          "dur": 9
+        }
+      ]
+    },
+    {
+      "id": "b04",
+      "chapter": "重力平衡圏",
+      "text": "（二つの引力がつり合うところ、それが重力平衡圏）",
+      "quote": false,
+      "seconds": 5,
+      "actions": [
+        {
+          "at": 4,
+          "do": "level",
+          "target": "forces",
+          "to": 0,
+          "dur": 3
+        }
+      ]
+    },
+    {
+      "id": "b05",
+      "chapter": "重力平衡圏",
+      "text": "そのときは、本を上へ放り上げても、下へおちてこないで、空間の或るところにじっと停ってしまう。",
+      "quote": true,
+      "seconds": 11,
+      "actions": [
+        {
+          "at": 0,
+          "do": "start",
+          "target": "cabin",
+          "dur": 6
+        }
+      ]
+    },
+    {
+      "id": "b06",
+      "chapter": "展望室",
+      "text": "月面は青白く輝き、くっきり黒い影でふちをとられた山岳や谿谷が手にとるようにありありと見えた。",
+      "quote": true,
+      "seconds": 10,
+      "actions": [
+        {
+          "at": 0,
+          "do": "level",
+          "target": "moon",
+          "to": 1,
+          "dur": 5
+        }
+      ]
+    },
+    {
+      "id": "b07",
+      "chapter": "展望室",
+      "text": "月世界の外の空間は全く暗黒であったが、その中に無数の星が寒そうな光を放って輝いていた。",
+      "quote": true,
+      "seconds": 9
+    },
+    {
+      "id": "b08",
+      "chapter": "宇宙の墓地",
+      "text": "探照灯は本艇が出しているのだが、あの青白い光の中に黒い小山のようなものが並んでしずかに動いているのが見えるだろう。",
+      "quote": true,
+      "seconds": 12,
+      "actions": [
+        {
+          "at": 0,
+          "do": "level",
+          "target": "searchlight",
+          "to": 1,
+          "dur": 4
+        }
+      ]
+    },
+    {
+      "id": "b09",
+      "chapter": "宇宙の墓地",
+      "text": "宇宙をとんでいる隕石などが、地球と月との引力の平衡点に吸込まれて、あのように堆積するのだ。",
+      "quote": true,
+      "seconds": 11
+    },
+    {
+      "id": "b10",
+      "chapter": "宇宙の墓地",
+      "text": "本艇から、いろいろな物を外へ放り出しているのが見えるだろう",
+      "quote": true,
+      "seconds": 14,
+      "actions": [
+        {
+          "at": 0,
+          "do": "start",
+          "target": "jettison",
+          "dur": 8
+        }
+      ]
+    },
+    {
+      "id": "b11",
+      "chapter": "展望室",
+      "text": "（ここまで。見回して、地球は後ろにある）",
+      "quote": false,
+      "seconds": 8
+    }
   ]
 }

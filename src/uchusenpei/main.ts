@@ -2,7 +2,7 @@ import '../global.css';
 import './styles.css';
 import * as THREE from 'three';
 import scriptUrl from './script.json?url';
-import { parseScript, type Script, type TimelineEvent } from './script';
+import { parseScript, type Action, type Beat, type Script } from './script';
 import { drawCaption } from './textures';
 import { buildActor, type Actor } from './world';
 
@@ -101,23 +101,32 @@ scene.add(captionPanel);
 // --- 読み上げ（ブラウザ内蔵の音声合成。外部サービスは使わない） ---
 const canSpeak = 'speechSynthesis' in window;
 let speechOn = false;
+// 読み上げ中は次の文へ進まない。声の終わりが届かない端末でも止まり続けないよう、待つのは目安の秒数 + SPEECH_GRACE まで
+let speaking = false;
+const SPEECH_GRACE = 15;
 function speak(text: string) {
-  if (!canSpeak || !speechOn) return;
+  if (!canSpeak) return;
   window.speechSynthesis.cancel();
+  speaking = false;
+  if (!speechOn || !text) return;
   const u = new SpeechSynthesisUtterance(text.replace(/[（）]/g, ''));
   u.lang = 'ja-JP';
   u.rate = 1;
+  u.onend = () => (speaking = false);
+  u.onerror = () => (speaking = false);
+  speaking = true;
   window.speechSynthesis.speak(u);
 }
 
-// --- 台本の再生 ---
+// --- 台本の再生（文ごとの区切りを順に進める） ---
 type Tween = { actor: Actor; from: number; to: number; dur: number; elapsed: number };
 let script: Script | undefined;
 let actors = new Map<string, Actor>();
 const levels = new Map<string, number>();
 let tweens: Tween[] = [];
-let cursor = 0;
-let time = 0;
+let beatIndex = -1;
+let beatTime = 0;
+let pending: Action[] = [];
 let playing = false;
 let ended = false;
 let caption = { chapter: '', text: '' };
@@ -132,27 +141,45 @@ function showCaption(chapter: string, text: string) {
   speak(text);
 }
 
-function fire(ev: TimelineEvent) {
-  switch (ev.do) {
-    case 'caption':
-      showCaption(ev.chapter ?? caption.chapter, ev.text);
-      break;
-    case 'level': {
-      const actor = actors.get(ev.target);
-      if (actor?.applyLevel) {
-        tweens.push({ actor, from: levels.get(ev.target) ?? 1, to: ev.to, dur: Math.max(ev.dur, 0.01), elapsed: 0 });
-        levels.set(ev.target, ev.to);
-      }
-      break;
-    }
-    case 'start':
-      actors.get(ev.target)?.start?.(ev.dur);
-      break;
-    case 'end':
-      ended = true;
-      setPlaying(false);
-      playBtn.textContent = 'もう一度';
-      break;
+function runAction(act: Action) {
+  const actor = actors.get(act.target);
+  if (!actor) return;
+  if (act.do === 'level') {
+    if (!actor.applyLevel) return;
+    tweens.push({ actor, from: levels.get(act.target) ?? 1, to: act.to, dur: Math.max(act.dur, 0.01), elapsed: 0 });
+    levels.set(act.target, act.to);
+  } else {
+    actor.start?.(act.dur);
+  }
+}
+
+function enterBeat(index: number) {
+  beatIndex = index;
+  beatTime = 0;
+  const beat: Beat | undefined = script?.beats[index];
+  if (!beat) {
+    ended = true;
+    setPlaying(false);
+    playBtn.textContent = 'もう一度';
+    return;
+  }
+  pending = [...(beat.actions ?? [])].sort((a, b) => a.at - b.at);
+  showCaption(beat.chapter, beat.text);
+}
+
+function advance(dt: number) {
+  const beat = script?.beats[beatIndex];
+  if (!beat) return;
+  beatTime += dt;
+  while (pending.length > 0 && (pending[0]?.at ?? Infinity) <= beatTime) {
+    const act = pending.shift();
+    if (act) runAction(act);
+  }
+  const waitingForVoice = speaking && beatTime < beat.seconds + SPEECH_GRACE;
+  if (beatTime >= beat.seconds && !waitingForVoice) {
+    // 文の途中で終わらなかった動きは、次の文へ移る前に出しておく
+    for (const act of pending) runAction(act);
+    enterBeat(beatIndex + 1);
   }
 }
 
@@ -179,16 +206,16 @@ function build(s: Script) {
     levels.set(spec.id, 'level' in spec && typeof spec.level === 'number' ? spec.level : 1);
     scene.add(actor.object);
   }
-  cursor = 0;
-  time = 0;
   ended = false;
-  showCaption('', '');
+  enterBeat(0);
 }
 
 function setPlaying(next: boolean) {
   playing = next;
   playBtn.textContent = playing ? '一時停止' : '再生';
-  if (!playing && canSpeak) window.speechSynthesis.cancel();
+  if (!canSpeak) return;
+  if (playing) window.speechSynthesis.resume();
+  else window.speechSynthesis.pause();
 }
 
 function togglePlay() {
@@ -211,8 +238,8 @@ speechBtn.addEventListener('click', () => {
   speechOn = !speechOn;
   speechBtn.setAttribute('aria-pressed', String(speechOn));
   speechBtn.textContent = speechOn ? '読み上げ: 入' : '読み上げ: 切';
-  if (speechOn) speak(caption.text);
-  else if (canSpeak) window.speechSynthesis.cancel();
+  // 入れたときは今の文から読み直す
+  speak(caption.text);
 });
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && e.target === document.body) {
@@ -259,13 +286,7 @@ const panelTarget = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
   if (playing && script) {
-    time += dt;
-    while (cursor < script.timeline.length) {
-      const ev = script.timeline[cursor];
-      if (!ev || ev.t > time) break;
-      fire(ev);
-      cursor++;
-    }
+    advance(dt);
     tweens = tweens.filter((tw) => {
       tw.elapsed = Math.min(tw.elapsed + dt, tw.dur);
       tw.actor.applyLevel?.(tw.from + (tw.to - tw.from) * (tw.elapsed / tw.dur));
@@ -273,7 +294,7 @@ renderer.setAnimationLoop(() => {
     });
     for (const actor of actors.values()) actor.update?.(dt);
   }
-  clockEl.textContent = script ? `${Math.floor(time)}秒` : '';
+  clockEl.textContent = script && !ended ? `${beatIndex + 1} / ${script.beats.length}` : '';
 
   if (renderer.xr.isPresenting) {
     const xrCamera = renderer.xr.getCamera();

@@ -1,4 +1,4 @@
-// 場面の台本（script.json）の型と検証。
+// 場面の台本（script.json）の型と検証。台本は「置く物（objects）」と「文ごとの区切り（beats）」でできている。
 // 台本は LLM が原文から書く想定なので、再生前に形を確かめて、壊れていれば何が悪いかを返す。
 
 export type Vec3 = [number, number, number];
@@ -55,18 +55,30 @@ export type ObjectSpec =
       seed: number;
     };
 
-export type TimelineEvent =
-  | { t: number; do: 'caption'; text: string; chapter?: string }
-  | { t: number; do: 'level'; target: string; to: number; dur: number }
-  | { t: number; do: 'start'; target: string; dur: number }
-  | { t: number; do: 'end' };
+// その文のあいだに起きること。at は文の頭からの秒
+export type Action =
+  | { at: number; do: 'level'; target: string; to: number; dur: number }
+  | { at: number; do: 'start'; target: string; dur: number };
+
+// 台本の 1 区切り = 本文の 1 文（または場面をつなぐ補いの 1 文）
+export type Beat = {
+  id: string;
+  // 原文のどの章の文か
+  chapter: string;
+  text: string;
+  // true なら本文そのまま、false なら場面をつなぐための補い
+  quote: boolean;
+  // 読み上げの目安の秒数。前の文が終わると次の文が始まる
+  seconds: number;
+  actions?: Action[];
+};
 
 export type Script = {
   title: string;
   source: { work: string; author: string; chapters: string[]; url: string };
   note?: string;
   objects: ObjectSpec[];
-  timeline: TimelineEvent[];
+  beats: Beat[];
 };
 
 const OBJECT_TYPES = new Set([
@@ -110,7 +122,7 @@ export function parseScript(raw: unknown): Script {
   if (typeof raw.title !== 'string') errors.push('title がありません');
   if (!isRecord(raw.source)) errors.push('source がありません');
   if (!Array.isArray(raw.objects)) errors.push('objects が配列ではありません');
-  if (!Array.isArray(raw.timeline)) errors.push('timeline が配列ではありません');
+  if (!Array.isArray(raw.beats)) errors.push('beats が配列ではありません');
   if (errors.length > 0) throw new Error(errors.join('\n'));
 
   const ids = new Set<string>();
@@ -128,22 +140,34 @@ export function parseScript(raw: unknown): Script {
     }
   }
 
-  for (const [i, ev] of (raw.timeline as unknown[]).entries()) {
-    if (!isRecord(ev) || typeof ev.t !== 'number' || typeof ev.do !== 'string') {
-      errors.push(`timeline[${i}]: t（秒）と do が必要です`);
+  const beatIds = new Set<string>();
+  for (const [i, beat] of (raw.beats as unknown[]).entries()) {
+    if (!isRecord(beat)) {
+      errors.push(`beats[${i}]: オブジェクトではありません`);
       continue;
     }
-    if (ev.do === 'caption' && typeof ev.text !== 'string') errors.push(`timeline[${i}]: caption には text が必要です`);
-    if (ev.do === 'level' || ev.do === 'start') {
-      if (typeof ev.target !== 'string' || !ids.has(ev.target)) errors.push(`timeline[${i}]: target「${String(ev.target)}」が objects にありません`);
-      if (typeof ev.dur !== 'number') errors.push(`timeline[${i}]: dur（秒）が必要です`);
+    const where = `beats[${i}]${typeof beat.id === 'string' ? ` (${beat.id})` : ''}`;
+    if (typeof beat.id !== 'string') errors.push(`${where}: id がありません`);
+    else if (beatIds.has(beat.id)) errors.push(`${where}: id が重複しています`);
+    else beatIds.add(beat.id);
+    if (typeof beat.chapter !== 'string') errors.push(`${where}: chapter（原文の章）がありません`);
+    if (typeof beat.text !== 'string') errors.push(`${where}: text がありません`);
+    if (typeof beat.quote !== 'boolean') errors.push(`${where}: quote（本文そのままか）は true / false`);
+    if (typeof beat.seconds !== 'number' || beat.seconds <= 0) errors.push(`${where}: seconds は正の数`);
+    if (beat.actions !== undefined && !Array.isArray(beat.actions)) errors.push(`${where}: actions は配列`);
+    for (const [j, act] of ((beat.actions as unknown[] | undefined) ?? []).entries()) {
+      const at = `${where}.actions[${j}]`;
+      if (!isRecord(act) || typeof act.at !== 'number' || typeof act.do !== 'string') {
+        errors.push(`${at}: at（秒）と do が必要です`);
+        continue;
+      }
+      if (act.do !== 'level' && act.do !== 'start') errors.push(`${at}: 知らない do「${act.do}」`);
+      if (typeof act.target !== 'string' || !ids.has(act.target)) errors.push(`${at}: target「${String(act.target)}」が objects にありません`);
+      if (typeof act.dur !== 'number') errors.push(`${at}: dur（秒）が必要です`);
+      if (act.do === 'level' && typeof act.to !== 'number') errors.push(`${at}: level には to（0〜1）が必要です`);
     }
-    if (ev.do === 'level' && typeof ev.to !== 'number') errors.push(`timeline[${i}]: level には to（0〜1）が必要です`);
-    if (!['caption', 'level', 'start', 'end'].includes(ev.do)) errors.push(`timeline[${i}]: 知らない do「${ev.do}」`);
   }
 
   if (errors.length > 0) throw new Error(errors.join('\n'));
-  const script = raw as unknown as Script;
-  script.timeline = [...script.timeline].sort((a, b) => a.t - b.t);
-  return script;
+  return raw as unknown as Script;
 }
