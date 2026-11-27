@@ -1,0 +1,86 @@
+{
+  "title": "宇宙尖兵 重力平衡圏",
+  "source": {
+    "work": "宇宙尖兵",
+    "author": "海野十三",
+    "chapters": ["重力平衡圏", "宇宙の墓地", "展望室"],
+    "url": "https://www.aozora.gr.jp/cards/000160/card3355.html"
+  },
+  "note": "視点は艇の展望室（原点）で、正面が -z。大きさは本文の印象（月面が手にとるように見える）に合わせた演出で、実際の平衡点からの見え方（月は約3.4度、地球は約2.2度）より月を大きくしている。",
+  "objects": [
+    { "id": "stars", "type": "stars", "count": 2400, "radius": 900, "seed": 7 },
+    { "id": "sun", "type": "sunlight", "direction": [1, 0.25, 0.15], "intensity": 2.4 },
+    { "id": "moon", "type": "moon", "position": [70, 95, -460], "radius": 52, "level": 0.25 },
+    { "id": "earth", "type": "earth", "position": [-50, -25, 470], "radius": 8 },
+    {
+      "id": "forces",
+      "type": "forceArrows",
+      "origin": [0, 0.15, -2.2],
+      "earth": [-50, -25, 470],
+      "moon": [70, 95, -460],
+      "maxLength": 1.1,
+      "balance": 0.15,
+      "level": 0
+    },
+    {
+      "id": "cabin",
+      "type": "cabinItems",
+      "table": [0, -0.5, -0.95],
+      "items": [
+        { "kind": "book", "position": [-0.18, -0.47, -0.92] },
+        { "kind": "ashtray", "position": [0.16, -0.48, -0.85] },
+        { "kind": "frame", "position": [0.75, 0.15, -1.3] }
+      ]
+    },
+    {
+      "id": "graveyard",
+      "type": "debrisField",
+      "center": [0, -6, -75],
+      "spread": [70, 7, 22],
+      "count": 150,
+      "size": [0.5, 3.2],
+      "drift": 0.25,
+      "seed": 11
+    },
+    {
+      "id": "searchlight",
+      "type": "searchlight",
+      "from": [0.4, -1.2, -0.6],
+      "to": [0, -6, -75],
+      "color": "#bcd6ff",
+      "angle": 0.2,
+      "intensity": 9,
+      "level": 0
+    },
+    {
+      "id": "jettison",
+      "type": "throwables",
+      "from": [0.3, -0.9, -1.4],
+      "toward": [0, -5, -60],
+      "count": 14,
+      "speed": [3, 7],
+      "seed": 3
+    }
+  ],
+  "timeline": [
+    { "t": 0, "do": "caption", "chapter": "重力平衡圏", "text": "（艇は地球と月のあいだを、月へ向かって進む）" },
+    { "t": 1, "do": "level", "target": "forces", "to": 1, "dur": 2 },
+    { "t": 4, "do": "caption", "text": "本艇は今地球からも引張られ、月からも引張られている。" },
+    { "t": 11, "do": "start", "target": "forces", "dur": 9 },
+    { "t": 11, "do": "caption", "text": "その距離の自乗に反比例して、重力は小さくなっていくのだ。" },
+    { "t": 20, "do": "caption", "text": "（二つの引力がつり合うところ、それが重力平衡圏）" },
+    { "t": 24, "do": "level", "target": "forces", "to": 0, "dur": 3 },
+    { "t": 25, "do": "start", "target": "cabin", "dur": 6 },
+    { "t": 25, "do": "caption", "text": "そのときは、本を上へ放り上げても、下へおちてこないで、空間の或るところにじっと停ってしまう。" },
+    { "t": 36, "do": "caption", "chapter": "展望室", "text": "月面は青白く輝き、くっきり黒い影でふちをとられた山岳や谿谷が手にとるようにありありと見えた。" },
+    { "t": 36, "do": "level", "target": "moon", "to": 1, "dur": 5 },
+    { "t": 46, "do": "caption", "text": "月世界の外の空間は全く暗黒であったが、その中に無数の星が寒そうな光を放って輝いていた。" },
+    { "t": 55, "do": "level", "target": "searchlight", "to": 1, "dur": 4 },
+    { "t": 55, "do": "caption", "chapter": "宇宙の墓地", "text": "探照灯は本艇が出しているのだが、あの青白い光の中に黒い小山のようなものが並んでしずかに動いているのが見えるだろう。" },
+    { "t": 67, "do": "caption", "text": "宇宙をとんでいる隕石などが、地球と月との引力の平衡点に吸込まれて、あのように堆積するのだ。" },
+    { "t": 78, "do": "start", "target": "jettison", "dur": 8 },
+    { "t": 78, "do": "caption", "text": "本艇から、いろいろな物を外へ放り出しているのが見えるだろう" },
+    { "t": 92, "do": "caption", "text": "（ここまで。見回して、地球は後ろにある）" },
+    { "t": 100, "do": "end" }
+  ]
+}
