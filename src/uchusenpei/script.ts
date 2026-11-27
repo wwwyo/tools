@@ -34,6 +34,8 @@ export type ObjectSpec =
       size: [number, number];
       drift: number;
       seed: number;
+      // 0 は闇に沈む、1 で探照灯に照らされた明るさ
+      level?: number;
     }
   | {
       id: string;

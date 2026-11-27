@@ -122,6 +122,9 @@ function label(text: string, color: string): THREE.Sprite {
   return sprite;
 }
 
+const LABEL_OFFSET_EARTH = new THREE.Vector3(-0.42, -0.14, 0);
+const LABEL_OFFSET_MOON = new THREE.Vector3(0.42, 0.14, 0);
+
 // 地球と月それぞれへの引力を矢印で見せる。長さは引力の大きさ。start で二つが同じ長さへ近づく
 function forceArrows(spec: Extract<ObjectSpec, { type: 'forceArrows' }>): Actor {
   const group = new THREE.Group();
@@ -148,8 +151,10 @@ function forceArrows(spec: Extract<ObjectSpec, { type: 'forceArrows' }>): Actor 
     const moonLen = spec.maxLength * (0.2 + 0.35 * balance);
     earthArrow.setLength(earthLen, 0.18, 0.1);
     moonArrow.setLength(moonLen, 0.18, 0.1);
-    earthLabel.position.copy(origin).addScaledVector(toEarth, earthLen + 0.25);
-    moonLabel.position.copy(origin).addScaledVector(toMoon, moonLen + 0.25);
+    // 地球側の矢印はほぼ視線の方向を向くので、先端に置くと二つのラベルが画面の同じ所に重なる。
+    // 矢印の中ほどから左下と右上へ離して置く
+    earthLabel.position.copy(origin).addScaledVector(toEarth, earthLen * 0.5).add(LABEL_OFFSET_EARTH);
+    moonLabel.position.copy(origin).addScaledVector(toMoon, moonLen * 0.5).add(LABEL_OFFSET_MOON);
   };
   return {
     object: group,
@@ -263,7 +268,15 @@ function debrisField(spec: Extract<ObjectSpec, { type: 'debrisField' }>): Actor 
     }
     mesh.instanceMatrix.needsUpdate = true;
   };
-  return { object: mesh, render: (s) => write(s.t) };
+  // level で暗さを変える。太陽光は当たっているので、色を落として闇に沈める
+  const base = material.color.clone();
+  return {
+    object: mesh,
+    render: (s) => {
+      material.color.copy(base).multiplyScalar(0.08 + 0.92 * s.level);
+      write(s.t);
+    },
+  };
 }
 
 function searchlight(spec: Extract<ObjectSpec, { type: 'searchlight' }>): Actor {

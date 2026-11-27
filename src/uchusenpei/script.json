@@ -71,7 +71,8 @@
       "count": 150,
       "size": [0.5, 3.2],
       "drift": 0.25,
-      "seed": 11
+      "seed": 11,
+      "level": 0.12
     },
     {
       "id": "searchlight",
@@ -197,6 +198,13 @@
           "at": 0,
           "do": "level",
           "target": "searchlight",
+          "to": 1,
+          "dur": 4
+        },
+        {
+          "at": 0,
+          "do": "level",
+          "target": "graveyard",
           "to": 1,
           "dur": 4
         }
