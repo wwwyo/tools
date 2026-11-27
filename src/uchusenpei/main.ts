@@ -246,8 +246,11 @@ async function setupVr() {
     const s = await navigator.xr?.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
     if (!s) return;
     session = s;
+    // VR 中は頭の位置が camera.position に書き込まれるので、終えたら画面での視点に戻す
+    const desktopPosition = camera.position.clone();
     s.addEventListener('end', () => {
       session = null;
+      camera.position.copy(desktopPosition);
       vrBtn.textContent = 'VRで見る';
       captionPanel.visible = false;
     });

@@ -7,7 +7,7 @@ export type ObjectSpec =
   | { id: string; type: 'stars'; count: number; radius: number; seed: number }
   | { id: string; type: 'sunlight'; direction: Vec3; intensity: number }
   | { id: string; type: 'moon'; position: Vec3; radius: number; level?: number }
-  | { id: string; type: 'earth'; position: Vec3; radius: number; level?: number }
+  | { id: string; type: 'earth'; position: Vec3; radius: number }
   | {
       id: string;
       type: 'forceArrows';
@@ -114,9 +114,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isVec3(value: unknown): boolean {
-  return Array.isArray(value) && value.length === 3 && value.every((n) => typeof n === 'number' && Number.isFinite(n));
+function isNumbers(value: unknown, length: number): boolean {
+  return Array.isArray(value) && value.length === length && value.every((n) => typeof n === 'number' && Number.isFinite(n));
 }
+
+function isVec3(value: unknown): boolean {
+  return isNumbers(value, 3);
+}
+
+const PAIR_KEYS = new Set(['size', 'speed']);
+const ITEM_KINDS = new Set(['book', 'ashtray', 'frame']);
 
 export function parseScript(raw: unknown): Script {
   const errors: string[] = [];
@@ -139,6 +146,16 @@ export function parseScript(raw: unknown): Script {
     for (const key of REQUIRED_KEYS[obj.type] ?? []) {
       if (!(key in obj)) errors.push(`objects[${i}] (${obj.id}): ${key} がありません`);
       else if (VEC3_KEYS.has(key) && !isVec3(obj[key])) errors.push(`objects[${i}] (${obj.id}): ${key} は [x, y, z] の数値`);
+      else if (PAIR_KEYS.has(key) && !isNumbers(obj[key], 2)) errors.push(`objects[${i}] (${obj.id}): ${key} は [最小, 最大] の数値`);
+    }
+    if (obj.type === 'cabinItems' && 'items' in obj) {
+      if (!Array.isArray(obj.items)) errors.push(`objects[${i}] (${obj.id}): items は配列`);
+      else
+        for (const [j, item] of (obj.items as unknown[]).entries()) {
+          if (!isRecord(item) || typeof item.kind !== 'string' || !ITEM_KINDS.has(item.kind))
+            errors.push(`objects[${i}] (${obj.id}).items[${j}]: kind は book / ashtray / frame`);
+          else if (!isVec3(item.position)) errors.push(`objects[${i}] (${obj.id}).items[${j}]: position は [x, y, z] の数値`);
+        }
     }
   }
 
