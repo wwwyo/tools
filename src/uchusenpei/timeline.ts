@@ -17,7 +17,8 @@ export type ActorState = {
   dur: number;
 };
 
-type LevelKey = { t: number; to: number; dur: number };
+// from は、その指定が始まった時刻の見え方。後から始まった指定はそこから補間し、前の指定はそこで打ち切る
+type LevelKey = { t: number; from: number; to: number; dur: number };
 type StartKey = { t: number; dur: number };
 
 export type Timeline = {
@@ -49,7 +50,7 @@ export function compile(script: Script): Timeline {
       const t = span.start + act.at;
       if (act.do === 'level') {
         const list = levelKeys.get(act.target) ?? [];
-        list.push({ t, to: act.to, dur: Math.max(act.dur, 0.01) });
+        list.push({ t, from: 0, to: act.to, dur: Math.max(act.dur, 0.01) });
         levelKeys.set(act.target, list);
       } else {
         const list = startKeys.get(act.target) ?? [];
@@ -60,18 +61,29 @@ export function compile(script: Script): Timeline {
   }
   for (const list of [...levelKeys.values(), ...startKeys.values()]) list.sort((a, b) => a.t - b.t);
 
+  const levelAt = (keys: LevelKey[], initial: number, t: number) => {
+    let current: LevelKey | undefined;
+    for (const key of keys) {
+      if (key.t > t) break;
+      current = key;
+    }
+    if (!current) return initial;
+    return current.from + (current.to - current.from) * clamp01((t - current.t) / current.dur);
+  };
+  // 各指定の開始値を、それより前の指定だけから決めておく
+  for (const [id, keys] of levelKeys) {
+    const initial = initialLevel.get(id) ?? 1;
+    for (const [i, key] of keys.entries()) key.from = levelAt(keys.slice(0, i), initial, key.t);
+  }
+
   const beatAt = (t: number) => {
     const i = beats.findIndex((b) => t < b.end);
     return i === -1 ? beats.length - 1 : i;
   };
 
   const stateAt = (id: string, t: number): ActorState => {
-    // level: 初期値から、t までに始まった level を順に当てる（途中のものはその割合だけ）
-    let level = initialLevel.get(id) ?? 1;
-    for (const key of levelKeys.get(id) ?? []) {
-      if (key.t > t) break;
-      level = level + (key.to - level) * clamp01((t - key.t) / key.dur);
-    }
+    // level: t までに始まった最後の指定が、その開始時の見え方から to へ補間する
+    const level = levelAt(levelKeys.get(id) ?? [], initialLevel.get(id) ?? 1, t);
     let since: number | null = null;
     let dur = 0;
     for (const key of startKeys.get(id) ?? []) {
