@@ -380,7 +380,7 @@ function cabinItems(spec: Extract<ObjectSpec, { type: 'cabinItems' }>): Actor {
     group.add(mesh);
     // 本は目の高さ近くまで上がる。ほかは少しだけ
     const rise = item.kind === 'book' ? 0.3 : item.kind === 'ashtray' ? 0.15 : 0;
-    return { mesh, base, rise, spin: (i + 1) * 0.35, toward: item.kind === 'book' ? 0.1 : 0.03 };
+    return { mesh, base, baseZ: mesh.rotation.z, rise, spin: (i + 1) * 0.35, toward: item.kind === 'book' ? 0.1 : 0.03 };
   });
 
   const materials: THREE.Material[] = [];
@@ -404,7 +404,7 @@ function cabinItems(spec: Extract<ObjectSpec, { type: 'cabinItems' }>): Actor {
         it.mesh.position.y = it.base.y + it.rise * k;
         it.mesh.position.z = it.base.z + it.toward * k;
         it.mesh.rotation.x = it.spin * k * 0.7;
-        it.mesh.rotation.z = it.spin * k * 0.25;
+        it.mesh.rotation.z = it.baseZ + it.spin * k * 0.25;
       }
     },
   };

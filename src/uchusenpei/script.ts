@@ -144,7 +144,7 @@ function poseErrors(value: unknown, where: string, partial: boolean): string[] {
   const errors: string[] = [];
   if ((!partial || 'position' in value) && !isVec3(value.position)) errors.push(`${where}: position は [x, y, z] の数値`);
   for (const key of ['yaw', 'pitch'] as const)
-    if ((!partial || key in value) && typeof value[key] !== 'number') errors.push(`${where}: ${key}（度）は数値`);
+    if ((!partial || key in value) && !(typeof value[key] === 'number' && Number.isFinite(value[key]))) errors.push(`${where}: ${key}（度）は数値`);
   return errors;
 }
 

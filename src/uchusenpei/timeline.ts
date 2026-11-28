@@ -23,7 +23,9 @@ type StartKey = { t: number; dur: number };
 
 // 視点の指定。from はその指定が始まった時刻の視点
 // given は台本に書かれた項目だけ。書かれていない項目は直前の視点を引き継ぐ
-type CameraKey = { t: number; given: Partial<Pose>; from: Pose; to: Pose; dur: number };
+// to は滑らかに動かすときの行き先、cutTo は動きを抑える設定で切り替えるときの行き先。
+// 書かなかった項目を引き継ぐ元が違う（前の動きの途中の値か、前の行き先か）
+type CameraKey = { t: number; given: Partial<Pose>; from: Pose; to: Pose; cutTo: Pose; dur: number };
 
 export type Timeline = {
   beats: BeatSpan[];
@@ -65,7 +67,7 @@ export function compile(script: Script): Timeline {
       const t = span.start + act.at;
       if (act.do === 'camera') {
         // from と to は下で、前の指定から順に埋める
-        cameraKeys.push({ t, given: act.to, from: script.camera, to: script.camera, dur: Math.max(act.dur, 0.01) });
+        cameraKeys.push({ t, given: act.to, from: script.camera, to: script.camera, cutTo: script.camera, dur: Math.max(act.dur, 0.01) });
       } else if (act.do === 'level') {
         const list = levelKeys.get(act.target) ?? [];
         list.push({ t, from: 0, to: act.to, dur: Math.max(act.dur, 0.01) });
@@ -102,12 +104,15 @@ export function compile(script: Script): Timeline {
       current = key;
     }
     if (!current) return script.camera;
-    if (cut) return current.to;
+    if (cut) return current.cutTo;
     return lerpPose(current.from, current.to, ease(clamp01((t - current.t) / current.dur)));
   };
+  let lastCut = script.camera;
   for (const [i, key] of cameraKeys.entries()) {
     key.from = cameraAt(cameraKeys.slice(0, i), key.t, false);
     key.to = { ...key.from, ...key.given };
+    key.cutTo = { ...lastCut, ...key.given };
+    lastCut = key.cutTo;
   }
 
   const beatAt = (t: number) => {
