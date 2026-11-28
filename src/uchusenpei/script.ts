@@ -3,19 +3,23 @@
 
 export type Vec3 = [number, number, number];
 
-export type ObjectSpec =
+// 視点。position は艇（見る人が乗っている）の位置、yaw / pitch は顔の向き（度。yaw は左が正、pitch は上が正）。
+// VR では向きは見る人の頭に任せ、position だけを使う
+export type Pose = { position: Vec3; yaw: number; pitch: number };
+
+type ObjectKind =
   | { id: string; type: 'stars'; count: number; radius: number; seed: number }
-  | { id: string; type: 'sunlight'; direction: Vec3; intensity: number }
+  | { id: string; type: 'sunlight'; direction: Vec3; intensity: number; level?: number }
   | { id: string; type: 'moon'; position: Vec3; radius: number; level?: number }
   | { id: string; type: 'earth'; position: Vec3; radius: number }
   | {
       id: string;
       type: 'forceArrows';
+      // 艇の中に浮かべる図。origin は図の中心、span は図の地球から月までの長さ
       origin: Vec3;
-      earth: Vec3;
-      moon: Vec3;
+      span: number;
       maxLength: number;
-      // 0 = 地球の引力だけ、1 = 二つがつり合う。start で 1 へ向かう
+      // 艇の位置。0 = 地球と月のあいだの 6 割、1 = 二つの引力がつり合う 9 割。start で 1 へ向かう
       balance: number;
       level?: number;
     }
@@ -24,6 +28,7 @@ export type ObjectSpec =
       type: 'cabinItems';
       table: Vec3;
       items: { kind: 'book' | 'ashtray' | 'frame'; position: Vec3 }[];
+      level?: number;
     }
   | {
       id: string;
@@ -40,8 +45,11 @@ export type ObjectSpec =
   | {
       id: string;
       type: 'searchlight';
-      from: Vec3;
-      to: Vec3;
+      // 光源は艇に付いている（mount は艇から見た位置）。光は center のまわりを sweep の幅で、sweepSpeed の速さで掃く
+      mount: Vec3;
+      center: Vec3;
+      sweep: Vec3;
+      sweepSpeed: number;
       color: string;
       angle: number;
       intensity: number;
@@ -50,17 +58,23 @@ export type ObjectSpec =
   | {
       id: string;
       type: 'throwables';
-      from: Vec3;
+      // 投げた時刻の艇の位置から mount だけずれた所から放り出す
+      mount: Vec3;
       toward: Vec3;
       count: number;
       speed: [number, number];
       seed: number;
     };
 
+// 艇の中の物（onShip: true）は艇と一緒に動く。ほかは宇宙に置かれたまま
+export type ObjectSpec = ObjectKind & { onShip?: boolean };
+
 // その文のあいだに起きること。at は文の頭からの秒
 export type Action =
   | { at: number; do: 'level'; target: string; to: number; dur: number }
-  | { at: number; do: 'start'; target: string; dur: number };
+  | { at: number; do: 'start'; target: string; dur: number }
+  // 視点を dur 秒かけて動かす。書いた項目だけが変わる
+  | { at: number; do: 'camera'; to: Partial<Pose>; dur: number };
 
 // 台本の 1 区切り = 本文の 1 文（または場面をつなぐ補いの 1 文）
 export type Beat = {
@@ -79,6 +93,8 @@ export type Script = {
   title: string;
   source: { work: string; author: string; chapters: string[]; url: string };
   note?: string;
+  // 始まりの視点
+  camera: Pose;
   objects: ObjectSpec[];
   beats: Beat[];
 };
@@ -101,14 +117,14 @@ const REQUIRED_KEYS: Record<string, string[]> = {
   sunlight: ['direction', 'intensity'],
   moon: ['position', 'radius'],
   earth: ['position', 'radius'],
-  forceArrows: ['origin', 'earth', 'moon', 'maxLength', 'balance'],
+  forceArrows: ['origin', 'span', 'maxLength', 'balance'],
   cabinItems: ['table', 'items'],
   debrisField: ['center', 'spread', 'count', 'size', 'drift', 'seed'],
-  searchlight: ['from', 'to', 'color', 'angle', 'intensity'],
-  throwables: ['from', 'toward', 'count', 'speed', 'seed'],
+  searchlight: ['mount', 'center', 'sweep', 'sweepSpeed', 'color', 'angle', 'intensity'],
+  throwables: ['mount', 'toward', 'count', 'speed', 'seed'],
 };
 
-const VEC3_KEYS = new Set(['position', 'direction', 'origin', 'earth', 'moon', 'table', 'center', 'spread', 'from', 'to', 'toward']);
+const VEC3_KEYS = new Set(['position', 'direction', 'origin', 'table', 'center', 'spread', 'mount', 'sweep', 'toward']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -122,6 +138,16 @@ function isVec3(value: unknown): boolean {
   return isNumbers(value, 3);
 }
 
+// 視点の検証。partial なら書いた項目だけを見る
+function poseErrors(value: unknown, where: string, partial: boolean): string[] {
+  if (!isRecord(value)) return [`${where}: 視点は { position, yaw, pitch } で書きます`];
+  const errors: string[] = [];
+  if ((!partial || 'position' in value) && !isVec3(value.position)) errors.push(`${where}: position は [x, y, z] の数値`);
+  for (const key of ['yaw', 'pitch'] as const)
+    if ((!partial || key in value) && typeof value[key] !== 'number') errors.push(`${where}: ${key}（度）は数値`);
+  return errors;
+}
+
 const PAIR_KEYS = new Set(['size', 'speed']);
 const ITEM_KINDS = new Set(['book', 'ashtray', 'frame']);
 
@@ -132,6 +158,7 @@ export function parseScript(raw: unknown): Script {
   if (!isRecord(raw.source)) errors.push('source がありません');
   if (!Array.isArray(raw.objects)) errors.push('objects が配列ではありません');
   if (!Array.isArray(raw.beats)) errors.push('beats が配列ではありません');
+  errors.push(...poseErrors(raw.camera, 'camera', false));
   if (errors.length > 0) throw new Error(errors.join('\n'));
 
   const ids = new Set<string>();
@@ -180,9 +207,13 @@ export function parseScript(raw: unknown): Script {
         errors.push(`${at}: at（秒）と do が必要です`);
         continue;
       }
+      if (typeof act.dur !== 'number') errors.push(`${at}: dur（秒）が必要です`);
+      if (act.do === 'camera') {
+        errors.push(...poseErrors(act.to, `${at}.to`, true));
+        continue;
+      }
       if (act.do !== 'level' && act.do !== 'start') errors.push(`${at}: 知らない do「${act.do}」`);
       if (typeof act.target !== 'string' || !ids.has(act.target)) errors.push(`${at}: target「${String(act.target)}」が objects にありません`);
-      if (typeof act.dur !== 'number') errors.push(`${at}: dur（秒）が必要です`);
       if (act.do === 'level' && typeof act.to !== 'number') errors.push(`${at}: level には to（0〜1）が必要です`);
     }
   }

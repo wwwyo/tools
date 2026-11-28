@@ -76,34 +76,47 @@ function paintSphere(width: number, height: number, fn: PixelFn): HTMLCanvasElem
   return canvas;
 }
 
-// 正距円筒上に、球面で丸く見えるクレーターを描く（高緯度ほど横に引き伸ばす）
+// 正距円筒上に、球面で丸く見えるクレーターを描く（高緯度ほど横に引き伸ばす）。
+// 起伏は高さの図（bump）にだけ描き、お椀形（底が低く、ふちが盛り上がる）にする。影は光の向きから three.js が付ける。
+// 色の図には、新しいクレーターのまわりの明るい筋（光条）だけを少し描く
 function drawCraters(color: CanvasRenderingContext2D, height: CanvasRenderingContext2D, w: number, h: number, seed: number) {
   const rand = mulberry32(seed);
-  const count = 900;
+  const count = 1400;
+  const stamp = (ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, stretch: number, stops: [number, string][]) => {
+    for (const dx of [0, -w, w]) {
+      ctx.save();
+      ctx.translate(cx + dx, cy);
+      ctx.scale(stretch, 1);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      for (const [at, c] of stops) g.addColorStop(at, c);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  };
   for (let i = 0; i < count; i++) {
     // 小さいクレーターほど多い
-    const r = Math.pow(rand(), 3.2) * 34 + 1.5;
+    const r = Math.pow(rand(), 3.4) * 40 + 1.2;
     const lat = Math.asin(rand() * 2 - 1);
     const cx = rand() * w;
     const cy = (0.5 - lat / Math.PI) * h;
     const stretch = 1 / Math.max(Math.cos(lat), 0.15);
-    for (const dx of [0, -w, w]) {
-      for (const [ctx, floor, rim] of [
-        [color, 'rgba(40,44,52,0.28)', 'rgba(235,240,250,0.22)'],
-        [height, 'rgba(0,0,0,0.55)', 'rgba(255,255,255,0.45)'],
-      ] as const) {
-        ctx.save();
-        ctx.translate(cx + dx, cy);
-        ctx.scale(stretch, 1);
-        ctx.beginPath();
-        ctx.arc(0, 0, r, 0, Math.PI * 2);
-        ctx.fillStyle = floor;
-        ctx.fill();
-        ctx.lineWidth = Math.max(1, r * 0.22);
-        ctx.strokeStyle = rim;
-        ctx.stroke();
-        ctx.restore();
-      }
+    const depth = 0.35 + rand() * 0.3;
+    stamp(height, cx, cy, r * 1.25, stretch, [
+      [0, `rgba(0,0,0,${depth})`],
+      [0.55, `rgba(0,0,0,${depth * 0.6})`],
+      [0.75, `rgba(255,255,255,${depth * 0.5})`],
+      [0.85, 'rgba(255,255,255,0)'],
+    ]);
+    // 大きめのクレーターの一部は新しく、まわりが明るい
+    if (r > 6 && rand() < 0.12) {
+      stamp(color, cx, cy, r * 4, stretch, [
+        [0, 'rgba(240,246,255,0.32)'],
+        [0.3, 'rgba(240,246,255,0.12)'],
+        [1, 'rgba(240,246,255,0)'],
+      ]);
     }
   }
 }
@@ -117,12 +130,15 @@ export function makeMoonTextures(width = 1024): MoonTextures {
   const color = paintSphere(width, h, (x, y, z) => {
     const maria = fbm(x * 1.6 + 3, y * 1.6, z * 1.6, 3, seed);
     const grain = fbm(x * 9, y * 9, z * 9, 4, seed + 5);
-    const dark = maria > 0.52 ? Math.min((maria - 0.52) * 4, 0.45) : 0;
-    const v = 0.62 + (grain - 0.5) * 0.35 - dark;
+    const dark = maria > 0.5 ? Math.min((maria - 0.5) * 3.5, 0.38) : 0;
+    const v = 0.66 + (grain - 0.5) * 0.28 - dark;
     return [Math.round(v * 205), Math.round(v * 214), Math.round(v * 232)];
   });
+  // 海は平らに、高地はでこぼこに
   const bump = paintSphere(width, h, (x, y, z) => {
-    const v = fbm(x * 7, y * 7, z * 7, 5, seed + 9);
+    const maria = fbm(x * 1.6 + 3, y * 1.6, z * 1.6, 3, seed);
+    const rough = maria > 0.5 ? 0.35 : 1;
+    const v = 0.5 + (fbm(x * 7, y * 7, z * 7, 5, seed + 9) - 0.5) * rough;
     const c = Math.round(v * 255);
     return [c, c, c];
   });
@@ -149,26 +165,25 @@ export function makeEarthTexture(width = 512): HTMLCanvasElement {
   });
 }
 
-// 字幕を VR 空間に置くための canvas。文字は折り返して最大 3 行
+// 字幕を VR 空間に置くための canvas。箱は敷かず、大きな明朝を影で浮かせる。中央揃えで最大 3 行
 export function drawCaption(canvas: HTMLCanvasElement, chapter: string, text: string) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const { width, height } = canvas;
   ctx.clearRect(0, 0, width, height);
   if (!text) return;
-  ctx.fillStyle = 'rgba(6, 8, 14, 0.72)';
-  ctx.beginPath();
-  ctx.roundRect(0, 0, width, height, 24);
-  ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+  ctx.shadowBlur = 14;
   ctx.fillStyle = '#9fb6d9';
-  ctx.font = '28px sans-serif';
-  ctx.fillText(chapter, 32, 48);
-  ctx.fillStyle = '#eef2f8';
-  ctx.font = '40px serif';
+  ctx.font = '28px "Sawarabi Gothic", sans-serif';
+  ctx.fillText(chapter.split('').join(' '), width / 2, 44);
+  ctx.fillStyle = '#f4f7fc';
+  ctx.font = '60px "Sawarabi Mincho", serif';
   const lines: string[] = [];
   let line = '';
   for (const ch of text) {
-    if (ctx.measureText(line + ch).width > width - 64) {
+    if (ctx.measureText(line + ch).width > width - 120) {
       lines.push(line);
       line = ch;
     } else {
@@ -176,5 +191,6 @@ export function drawCaption(canvas: HTMLCanvasElement, chapter: string, text: st
     }
   }
   if (line) lines.push(line);
-  lines.slice(0, 3).forEach((l, i) => ctx.fillText(l, 32, 108 + i * 54));
+  // 影を二度重ねて、星の上でも読めるようにする
+  for (let pass = 0; pass < 2; pass++) lines.slice(0, 3).forEach((l, i) => ctx.fillText(l, width / 2, 130 + i * 92));
 }

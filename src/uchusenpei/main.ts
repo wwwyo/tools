@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import scriptUrl from './script.json?url';
 import { parseScript } from './script';
 import { drawCaption } from './textures';
+import type { Pose } from './script';
 import { compile, type Timeline } from './timeline';
-import { buildActor, type Actor } from './world';
+import { buildActor, type Actor, type RenderContext } from './world';
 
 const appEl = document.getElementById('app');
 if (!appEl) throw new Error('app element not found');
@@ -13,11 +14,10 @@ if (!appEl) throw new Error('app element not found');
 appEl.innerHTML = `
   <div id="stage" class="relative h-[82dvh] w-full overflow-hidden bg-black select-none touch-none">
     <p id="status" class="absolute inset-0 m-0 flex items-center justify-center text-sm text-muted-foreground">場面を組み立てています…</p>
-    <div id="caption" class="pointer-events-none absolute inset-x-0 bottom-28 mx-auto hidden max-w-2xl px-5">
-      <div class="rounded bg-black/70 px-4 py-3">
-        <p id="caption-chapter" class="m-0 text-xs text-muted-foreground"></p>
-        <p id="caption-text" class="m-0 font-serif text-base text-foreground"></p>
-      </div>
+    <div class="stage-shade pointer-events-none absolute inset-0"></div>
+    <div id="caption" class="pointer-events-none absolute inset-x-0 bottom-28 mx-auto hidden max-w-3xl px-6 text-center">
+      <p id="caption-chapter" class="caption-chapter m-0"></p>
+      <p id="caption-text" class="caption-text m-0"></p>
     </div>
     <div class="absolute inset-x-0 bottom-3 mx-auto flex max-w-2xl flex-col gap-2 px-4">
       <input type="range" id="seek" class="w-full accent-primary" min="0" max="1" step="0.1" value="0" aria-label="場面の位置" disabled>
@@ -54,6 +54,9 @@ const clockEl = $('clock');
 // --- renderer / camera ---
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// 太陽や光の筋の強い明るさを、白く飛ばさずに映画のフィルムのように丸める
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 renderer.xr.enabled = true;
 // 座っても立っても使えるよう、床ではなく開始時の頭の位置を原点にする
 renderer.xr.setReferenceSpaceType('local');
@@ -62,8 +65,15 @@ renderer.domElement.classList.add('block', 'h-full', 'w-full');
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
-const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 2500);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 3000);
 camera.rotation.order = 'YXZ';
+// 見る人は艇に乗っている。台本の camera で艇が動き、艇の中の物（onShip）も一緒に動く。
+// VR では WebXR が頭の位置を艇の中の位置として扱うので、艇を動かせばそのまま一緒に運ばれる
+const ship = new THREE.Group();
+ship.add(camera);
+scene.add(ship);
+// 動きを減らす設定では、視点を滑らかに動かさず、文の区切りで切り替える
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 function resize() {
   const { clientWidth: w, clientHeight: h } = stage;
@@ -74,9 +84,9 @@ function resize() {
 new ResizeObserver(resize).observe(stage);
 resize();
 
-// --- 画面の上でドラッグして見回す（VR 以外） ---
+// --- 画面の上でドラッグして見回す（VR 以外）。台本の顔の向きに足す ---
 let yaw = 0;
-let pitch = 0.08;
+let pitch = 0;
 let dragging: { x: number; y: number } | undefined;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   dragging = { x: e.clientX, y: e.clientY };
@@ -93,17 +103,18 @@ renderer.domElement.addEventListener('pointercancel', () => (dragging = undefine
 
 // --- VR 内の字幕（頭の向きにゆっくり付いてくる板） ---
 const captionCanvas = document.createElement('canvas');
-captionCanvas.width = 1280;
-captionCanvas.height = 300;
+captionCanvas.width = 1600;
+captionCanvas.height = 400;
 const captionTexture = new THREE.CanvasTexture(captionCanvas);
 captionTexture.colorSpace = THREE.SRGBColorSpace;
 const captionPanel = new THREE.Mesh(
-  new THREE.PlaneGeometry(1.6, 0.375),
+  new THREE.PlaneGeometry(1.6, 0.4),
   new THREE.MeshBasicMaterial({ map: captionTexture, transparent: true, depthTest: false }),
 );
 captionPanel.renderOrder = 10;
 captionPanel.visible = false;
-scene.add(captionPanel);
+// 艇の中に置く。宇宙に置くと、艇が動くたびに字幕が後ろへ取り残される
+ship.add(captionPanel);
 
 // --- 読み上げ（ブラウザ内蔵の音声合成。外部サービスは使わない） ---
 const canSpeak = 'speechSynthesis' in window;
@@ -142,9 +153,18 @@ function showBeat(index: number) {
   holding = 0;
   const chapter = span?.beat.chapter ?? '';
   const text = span?.beat.text ?? '';
-  captionChapterEl.textContent = chapter;
+  // 章は変わったときだけ出す
+  const previousChapter = index > 0 ? timeline?.beats[index - 1]?.beat.chapter : undefined;
+  captionChapterEl.textContent = chapter !== previousChapter ? chapter : '';
   captionTextEl.textContent = text;
+  captionTextEl.dataset.quote = String(span?.beat.quote ?? true);
   captionEl.classList.toggle('hidden', !text);
+  // 文ごとにふわっと出す。アニメーションを最初から流し直す
+  for (const el of [captionChapterEl, captionTextEl]) {
+    el.classList.remove('caption-in');
+    void el.offsetWidth;
+    el.classList.add('caption-in');
+  }
   drawCaption(captionCanvas, chapter, text);
   captionTexture.needsUpdate = true;
   speak(text);
@@ -261,24 +281,32 @@ async function setupVr() {
 }
 
 // --- 毎フレーム ---
-const clock = new THREE.Clock();
 const headPos = new THREE.Vector3();
 const headDir = new THREE.Vector3();
 const panelTarget = new THREE.Vector3();
-const panelOffset = new THREE.Vector3(0, -0.55, 0);
+const panelOffset = new THREE.Vector3(0, -0.5, 0);
+const DEG = Math.PI / 180;
+const poseAt = (t: number): Pose => timeline?.poseAt(t, reduceMotion.matches) ?? { position: [0, 0, 0], yaw: 0, pitch: 0 };
+const renderContext: RenderContext = { poseAt };
+let pose = poseAt(0);
+let last = performance.now();
 
-renderer.setAnimationLoop(() => {
-  const dt = Math.min(clock.getDelta(), 0.1);
+renderer.setAnimationLoop((now) => {
+  const dt = Math.min(Math.max((now - last) / 1000, 0), 0.1);
+  last = now;
   tick(dt);
   if (timeline) {
-    for (const [id, actor] of actors) actor.render?.(timeline.stateAt(id, time));
+    pose = poseAt(time);
+    ship.position.set(...pose.position);
+    for (const [id, actor] of actors) actor.render?.(timeline.stateAt(id, time), renderContext);
     if (!seeking) seekEl.value = String(time);
     clockEl.textContent = `${beatIndex + 1} / ${timeline.beats.length}`;
   }
 
   if (renderer.xr.isPresenting) {
+    // 頭の位置と向きを艇の中の座標で見る
     const xrCamera = renderer.xr.getCamera();
-    xrCamera.getWorldPosition(headPos);
+    ship.worldToLocal(xrCamera.getWorldPosition(headPos));
     xrCamera.getWorldDirection(headDir);
     headDir.y = 0;
     if (headDir.lengthSq() > 1e-6) headDir.normalize();
@@ -287,7 +315,7 @@ renderer.setAnimationLoop(() => {
     captionPanel.lookAt(headPos.x, captionPanel.position.y, headPos.z);
     captionPanel.visible = !captionEl.classList.contains('hidden');
   } else {
-    camera.rotation.set(-pitch, -yaw, 0);
+    camera.rotation.set(pose.pitch * DEG - pitch, pose.yaw * DEG - yaw, 0);
   }
   renderer.render(scene, camera);
 });
@@ -297,12 +325,18 @@ async function boot() {
   try {
     const res = await fetch(scriptUrl);
     const script = parseScript(await res.json());
+    // 字幕と図の文字を canvas に描く前に、使う字の明朝・ゴシック体を読み込んでおく（読めなくても既定の字で続ける）
+    const allText = script.beats.map((b) => b.text + b.chapter).join('');
+    await Promise.all([
+      document.fonts.load('54px "Sawarabi Mincho"', allText),
+      document.fonts.load('52px "Sawarabi Gothic"', '地球の引力月重力平衡圏'),
+    ]).catch(() => undefined);
     // 月と地球の表面の生成は重いので、「組み立てています」を一度描いてから始める
     await new Promise((r) => setTimeout(r, 30));
     for (const spec of script.objects) {
       const actor = buildActor(spec);
       actors.set(spec.id, actor);
-      scene.add(actor.object);
+      (spec.onShip ? ship : scene).add(actor.object);
     }
     timeline = compile(script);
     seekEl.max = String(timeline.total);
