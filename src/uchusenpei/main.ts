@@ -284,6 +284,7 @@ async function setupVr() {
 const headPos = new THREE.Vector3();
 const headDir = new THREE.Vector3();
 const panelTarget = new THREE.Vector3();
+const headLook = new THREE.Vector3();
 const panelOffset = new THREE.Vector3(0, -0.5, 0);
 const DEG = Math.PI / 180;
 const poseAt = (t: number): Pose => timeline?.poseAt(t, reduceMotion.matches) ?? { position: [0, 0, 0], yaw: 0, pitch: 0 };
@@ -312,7 +313,8 @@ renderer.setAnimationLoop((now) => {
     if (headDir.lengthSq() > 1e-6) headDir.normalize();
     panelTarget.copy(headPos).addScaledVector(headDir, 2).add(panelOffset);
     captionPanel.position.lerp(panelTarget, 1 - Math.exp(-dt * 1.5));
-    captionPanel.lookAt(headPos.x, captionPanel.position.y, headPos.z);
+    // lookAt は世界座標の点を取る。艇の中の座標のまま渡すと、艇が原点を離れたとき板が横や裏を向く
+    captionPanel.lookAt(ship.localToWorld(headLook.set(headPos.x, captionPanel.position.y, headPos.z)));
     captionPanel.visible = !captionEl.classList.contains('hidden');
   } else {
     camera.rotation.set(pose.pitch * DEG - pitch, pose.yaw * DEG - yaw, 0);
